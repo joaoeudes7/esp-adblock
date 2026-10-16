@@ -1,0 +1,14 @@
+BasedOnStyle: LLVM
+IndentWidth: 2
+TabWidth: 2
+UseTab: Never
+ColumnLimit: 0          # the codebase uses compact one-liners; don't rewrap
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+AllowShortLoopsOnASingleLine: true
+BreakBeforeBraces: Attach
+SpaceBeforeParens: ControlStatements
+SortIncludes: false     # platform #include blocks are intentional
+ReflowComments: false
+DerivePointerAlignment: false
+PointerAlignment: Left
