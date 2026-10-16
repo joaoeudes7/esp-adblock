@@ -1,0 +1,37 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [esp8266, c3, esp32dev, esp32s3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+      - run: pip install -U platformio
+      # extra_scripts (tools/gen_config.py) seeds src/secrets.h from config.env.example
+      # when there is no config.env, so no manual secrets step is needed.
+      - run: pio run -e ${{ matrix.env }}
+
+  blocklist-tool:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: build_bloom.py format + membership tests
+        run: python3 -m unittest discover -s tools -p 'test_*.py' -v

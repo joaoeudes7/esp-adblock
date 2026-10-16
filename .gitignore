@@ -1,0 +1,33 @@
+# PlatformIO build output
+.pio/
+.vscode/
+
+# macOS metadata
+.DS_Store
+._*
+
+# VS Code workspace file
+*.code-workspace
+
+# Generated blocklist (build it with tools/build_bloom.py)
+data/blocklist.bin
+
+# Generated local config (from config.env). data/wifi.cfg holds WiFi credentials — never commit.
+data/*.cfg
+
+# build-time local config (secrets). The example is config.env.example
+config.env
+src/secrets.h
+
+# Backups / scratch
+*.bak
+
+# Python
+__pycache__/
+*.pyc
+
+# GENERATED from web/*.html by tools/build_web.py
+src/page.h
+
+# impeccable (design tool) working artifacts
+.impeccable/
