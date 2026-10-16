@@ -1,0 +1,359 @@
+<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>ESP ADBlock</title>
+<link rel="stylesheet" href="https://unpkg.com/open-props@1.7.23/open-props.min.css">
+<style>
+:root{
+  --bg:#0d1117; --surface:#161b22; --panel:#1c2128; --panel-hover:#272e38; --line:#30363d;
+  --ink:#e6edf3; --muted:#9aa4b2; --ok:#3fb950; --ok-soft:#2a5a37; --bad:#e5534b; --bad-soft:#5a2a2a;
+  --warn:#e3b341; --warn-bg:#2a1717; --warn-line:#6e2b28; --warn-ink:#ffd9d5;
+  --lead:#0f2318; --flash:#1f6f3d; --r:var(--radius-2,10px);
+}
+*{box-sizing:border-box}
+body{font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;margin:0;background:var(--bg);color:var(--ink)}
+header{display:flex;align-items:center;gap:10px;background:var(--surface);padding:14px 18px;border-bottom:1px solid var(--line)}
+header h1{margin:0;font-size:16px;font-weight:650;letter-spacing:-.01em}
+header .sub{color:var(--muted);font-size:12px}
+.spacer{flex:1}
+.badge{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:3px 10px;white-space:nowrap}
+.badge.on{color:var(--ok);border-color:var(--ok-soft)}.badge.off{color:var(--bad);border-color:var(--bad-soft)}
+main{padding:18px;max-width:1000px;margin:auto}
+section{margin-bottom:26px}
+h2{font-size:14px;font-weight:600;color:var(--ink);margin:0 0 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+h3{font-size:13px;font-weight:600;color:var(--muted);margin:20px 0 8px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;box-shadow:var(--shadow-1,0 1px 2px #0005)}
+.lead{background:var(--lead);border:1px solid var(--ok-soft);border-radius:var(--r);padding:16px;box-shadow:var(--shadow-1,0 1px 2px #0005)}
+.lead h2{font-size:15px}
+.lead .ip{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:6px 0 8px}
+.lead .ip b{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+.note{color:var(--muted);font-size:12.5px;line-height:1.5}
+.note.ok{color:var(--ok)}.note.bad{color:var(--bad)}
+.host{display:flex;align-items:center;gap:7px}
+.fav{width:16px;height:16px;border-radius:3px;flex:none;background:var(--bg)}
+.mono{font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink)}
+.warn{display:none;background:var(--warn-bg);border:1px solid var(--warn-line);color:var(--warn-ink);border-radius:var(--r);padding:12px 14px;margin-bottom:22px;font-size:13px}
+.status{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.status .dot{font-size:18px}
+.status b{font-weight:600}
+.kpis{display:flex;gap:26px;flex-wrap:wrap}
+.kpi{display:flex;flex-direction:column}
+.kpi-n{font-size:24px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
+.kpi-l{color:var(--muted);font-size:12.5px}
+.a{color:var(--ok)}
+.ratio{display:flex;height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin-top:14px}
+.ratio .seg{background:var(--ok)}
+.ratio-cap{color:var(--muted);font-size:11.5px;margin-top:5px;font-variant-numeric:tabular-nums}
+.devline{color:var(--muted);font-size:12.5px;margin-top:10px}
+table{width:100%;border-collapse:collapse;margin:0}
+th,td{padding:9px 10px;text-align:left;border-bottom:1px solid var(--line);font-size:13.5px}
+th{color:var(--muted);font-weight:500;font-size:12.5px}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover td{background:var(--panel)}
+.sortbtn{background:none;border:0;color:inherit;font:inherit;padding:0;cursor:pointer}
+.sortbtn:hover{color:var(--ink)}
+.sortbtn:focus-visible{outline:2px solid var(--ok);outline-offset:2px;border-radius:4px}
+button{font:inherit;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:var(--r);padding:6px 12px;cursor:pointer;transition:background .15s var(--ease-3,ease),border-color .15s var(--ease-3,ease)}
+button:hover{background:var(--panel-hover)}
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid var(--ok);outline-offset:2px}
+button:disabled{opacity:.55;cursor:default}
+input,select{font:inherit;background:var(--bg);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px 9px}
+input::placeholder{color:var(--muted)}
+.row{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.row.tight{gap:8px}
+.col{display:flex;flex-direction:column;gap:9px;align-items:flex-start}
+label.field{cursor:pointer}
+.modal{position:fixed;inset:0;background:#000a;display:flex;align-items:flex-start;justify-content:center;padding:24px;overflow:auto;z-index:60}
+.modal[hidden]{display:none}
+.modalbox{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);max-width:760px;width:100%;box-shadow:var(--shadow-3,0 8px 24px #0007)}
+.modalhead{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--surface);border-radius:var(--r) var(--r) 0 0;z-index:1}
+.modalbody{padding:0 16px 20px}
+.iconbtn{background:none;border:0;color:var(--muted);padding:6px;border-radius:8px;display:inline-flex;cursor:pointer}
+.iconbtn:hover{background:var(--panel-hover);color:var(--ink)}
+.field{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:13px}
+.twrap{overflow-x:auto;-webkit-overflow-scrolling:touch;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow-1,0 1px 2px #0005)}
+.empty{color:var(--muted);padding:14px 10px;font-size:13px}
+details.adv{border:1px solid var(--line);border-radius:var(--r);background:var(--surface);box-shadow:var(--shadow-1,0 1px 2px #0005)}
+details.adv>summary{cursor:pointer;padding:13px 16px;font-weight:600;font-size:13.5px;list-style:none}
+details.adv>summary::-webkit-details-marker{display:none}
+details.adv>summary::before{content:"▸ ";color:var(--muted)}
+details.adv[open]>summary::before{content:"▾ "}
+details.adv .body{padding:0 16px 16px}
+.filter{flex:1;min-width:120px;max-width:220px}
+#toasts{position:fixed;right:14px;bottom:14px;display:flex;flex-direction:column;align-items:flex-end;gap:6px;z-index:50}
+.toast{background:var(--surface);border:1px solid var(--ok);color:var(--ink);padding:9px 13px;border-radius:8px;font-size:13px;box-shadow:var(--shadow-3,0 4px 14px #0006)}
+.toast.err{border-color:var(--bad)}
+#loadbar{position:fixed;top:0;left:0;height:3px;width:100%;z-index:100;display:none;background:linear-gradient(90deg,transparent,var(--ok),transparent);background-size:40% 100%;background-repeat:no-repeat;animation:slide 1s linear infinite}
+#loadbar.on{display:block}
+@keyframes slide{0%{background-position:-40% 0}100%{background-position:140% 0}}
+.spinner{width:20px;height:20px;border:2px solid var(--line);border-top-color:var(--ok);border-radius:50%;animation:spin .8s linear infinite;display:inline-block;vertical-align:-4px;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px;padding:6px 0}
+svg.lucide{width:16px;height:16px;vertical-align:-3px;flex:none}
+h2 svg.lucide,details.adv>summary svg.lucide{width:17px;height:17px}
+.btnico{display:inline-flex;align-items:center;gap:6px}
+.badge svg.lucide{width:13px;height:13px;vertical-align:-2px}
+.status .dot svg.lucide{width:20px;height:20px;vertical-align:-4px}
+tr.new td{animation:fade 1.6s ease-out}
+@keyframes fade{from{background:var(--flash)}to{background:transparent}}
+@media(max-width:640px){main{padding:12px}h1{font-size:15px}th,td{padding:7px 8px}.kpis{gap:18px}.kpi-n{font-size:21px}button,input,select{min-height:44px}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style></head><body>
+<div id=loadbar class=on></div>
+<header>
+  <h1><i data-lucide="shield-check" aria-hidden=true></i> ESP ADBlock</h1>
+  <span class=sub id=host></span>
+  <span class=spacer></span>
+  <span class="badge" id=ver></span>
+  <span id=conn class="badge">connecting…</span>
+</header>
+<main>
+  <div id=credwarn class=warn role=alert>
+    <i data-lucide="triangle-alert" aria-hidden=true></i> The panel password is still the default. Change <code>WEB_PASS</code> in <code>config.env</code> and reflash.
+  </div>
+
+  <section class=lead>
+    <h2>Point your devices at this DNS</h2>
+    <div class=ip><b id=dnsip>…</b> <button class=btnico onclick="copyIP()"><i data-lucide="copy" aria-hidden=true></i>Copy IP</button> <button class=btnico onclick="testDns(event)"><i data-lucide="activity" aria-hidden=true></i>Test DNS</button> <span id=dnstest class=note></span></div>
+    <div class=note>A DNS server must be an <b>IP address</b> (not the <code>esp-adblock.local</code> name). Set it on your router's DHCP or per device. Set a static <code>WIFI_IP</code> in config.env to keep it from changing.</div>
+  </section>
+
+  <section>
+    <div class=status>
+      <span class=dot id=blockdot aria-hidden=true></span><b id=blockstate data-on=1>Blocking active</b>
+      <span class=spacer></span>
+      <span class=field id=pausedurwrap>for <select id=pausedur aria-label="Pause duration"><option value=30>30s</option><option value=300 selected>5 min</option><option value=1800>30 min</option><option value=0>until I turn it back on</option></select></span>
+      <button id=pausebtn onclick="togglePause(event)">Pause</button>
+    </div>
+  </section>
+
+  <section class=card>
+    <div id=sum><div class=loading><span class=spinner></span>Loading…</div></div>
+    <div class=devline id=dev></div>
+  </section>
+
+  <section>
+    <h2><i data-lucide="history" aria-hidden=true></i> Recently blocked <span id=evn class=note></span></h2>
+    <div class="row tight" style=margin-bottom:8px><input id=efilter class=filter placeholder="filter by host" aria-label="Filter recently blocked by host"></div>
+    <div class=twrap><table id=evt><thead><tr><th>Website</th><th>Client</th><th>When</th><th><span class=note>Action</span></th></tr></thead><tbody></tbody></table></div>
+    <div class=note style=margin-top:6px>Choose <b>allow</b> to let a site through (it stays unblocked).</div>
+  </section>
+
+  <section>
+    <h2><i data-lucide="monitor-smartphone" aria-hidden=true></i> Devices on your network</h2>
+    <div class="row tight" style=margin-bottom:8px><input id=cfilter class=filter placeholder="filter by IP or MAC" aria-label="Filter devices by IP or MAC"></div>
+    <div class=twrap><table id=ct><thead><tr>
+      <th id=th-ip aria-sort=none><button class=sortbtn onclick="setCS('ip')">Device <span id=cs-ip></span></button></th>
+      <th id=th-mac aria-sort=none><button class=sortbtn onclick="setCS('mac')">MAC <span id=cs-mac></span></button></th>
+      <th id=th-blocked aria-sort=descending><button class=sortbtn onclick="setCS('blocked')">Blocked <span id=cs-blocked></span></button></th>
+      <th id=th-allowed aria-sort=none><button class=sortbtn onclick="setCS('allowed')">Allowed <span id=cs-allowed></span></button></th>
+    </tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <div class="row tight" style="justify-content:flex-end">
+    <button class=btnico onclick="advOpen()"><i data-lucide="settings" aria-hidden=true></i>Advanced settings</button>
+  </div>
+
+  <div id=adv class=modal hidden>
+    <div class=modalbox role=dialog aria-modal=true aria-label="Advanced settings">
+      <div class=modalhead><b>Advanced settings</b><button class=iconbtn onclick="advClose()" aria-label="Close"><i data-lucide="x" aria-hidden=true></i></button></div>
+      <div class=modalbody>
+      <h3>How blocked answers look</h3>
+      <div class="row tight" style=margin-bottom:8px>
+        <select id=bmode aria-label="Blocked reply mode"><option value=ip>ESP IP (shows block page)</option><option value=zero>0.0.0.0</option><option value=nxdomain>NXDOMAIN</option></select>
+      </div>
+      <div class=col>
+        <label class=field><input type=checkbox id=v4only onchange="saveV4(event)"> IPv4-only (hide IPv6)</label>
+        <label class=field><input type=checkbox id=kw onchange="saveKw(event)"> Keyword block (ads/tracker)</label>
+        <label class=field><input type=checkbox id=rb onchange="saveRb(event)"> Rebind guard</label>
+        <label class=field><input type=checkbox id=ss onchange="saveSs(event)"> SafeSearch (needs IPv4-only)</label>
+      </div>
+      <h3>Remote syslog (optional)</h3>
+      <div class="row tight"><input id=shost placeholder="host (empty = off)" size=18 aria-label="Syslog host"><input id=sport value=514 size=4 style=width:64px aria-label="Syslog port"><button class=btnico onclick="saveSyslog(event)"><i data-lucide="check" aria-hidden=true></i>Save</button></div>
+
+      <h3>Always-blocked websites</h3>
+      <div class="row tight" style=margin-bottom:8px><input id=dom placeholder="ads.example.com" size=28 aria-label="Domain to always block"><button class=btnico onclick="addDom(event)"><i data-lucide="plus" aria-hidden=true></i>Block</button></div>
+      <div class=twrap><table id=cl><tbody></tbody></table></div>
+
+      <h3>Wildcard rules</h3>
+      <div class="row tight" style=margin-bottom:8px><input id=wild placeholder="*.ads.example.com" size=28 aria-label="Wildcard block pattern"><button class=btnico onclick="addWild(event)"><i data-lucide="plus" aria-hidden=true></i>Block</button></div>
+      <div class=twrap><table id=wl><tbody></tbody></table></div>
+
+      <h3>Rules file (/rules.cfg)</h3>
+      <div class=note style=margin-bottom:8px>One rule per line: <code>block &lt;d&gt;</code>, <code>wildcard *.x.y</code>, <code>allow &lt;d&gt;</code>, <code>keyword &lt;t&gt;</code> (AdGuard <code>||d</code> / <code>@@||d</code> also work). Editing here replaces the whole file.</div>
+      <textarea id=rules style="width:100%;height:150px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace" aria-label="Rules file"></textarea>
+      <div class="row tight" style=margin-top:8px><button class=btnico onclick="saveRulesFile()"><i data-lucide="check" aria-hidden=true></i>Save</button><span id=rulesmsg class=note></span></div>
+
+      <h3>Local names (this device answers these)</h3>
+      <div class="row tight" style=margin-bottom:8px><input id=hname placeholder="nas.lan" size=16 aria-label="Local name"><input id=hip placeholder="192.168.0.10" size=14 aria-label="IP address for the local name"><button class=btnico onclick="addHost(event)"><i data-lucide="plus" aria-hidden=true></i>Add</button></div>
+      <div class=twrap><table id=ht><tbody></tbody></table></div>
+
+      <h3>Blocklist</h3>
+      <form id=upf class="row tight" style=margin-bottom:6px><input type=file id=blf accept=.bin aria-label="Blocklist file"><button class=btnico><i data-lucide="upload" aria-hidden=true></i>Upload blocklist</button><span id=upmsg class=note></span></form>
+      <div class=note style=margin-bottom:10px>Build <code>blocklist.bin</code> with <code>tools/build_bloom.py</code>, then upload here. No USB.</div>
+      <div class="row tight"><input id=uurl placeholder="https://host/blocklist.bin" size=38 aria-label="Remote blocklist URL"><span class=field>every <input id=uiv size=2 value=24 style=width:52px aria-label="Auto-update interval in hours"> h</span><button class=btnico onclick="saveUpd(event)"><i data-lucide="check" aria-hidden=true></i>Save</button><button class=btnico onclick="fetchNow(event)"><i data-lucide="refresh-cw" aria-hidden=true></i>Fetch now</button></div>
+      <div class=note style=margin-top:6px>Pulls a prebuilt blocklist on a schedule. Last: <span id=ustat>—</span></div>
+
+      <h3>Counters</h3>
+      <div class="row tight"><span class=note>Persisted across reboots. Reset zeroes blocked/allowed/cached, per&#8209;client counts and the recent list.</span><button class=btnico onclick="resetStats(event)"><i data-lucide="trash-2" aria-hidden=true></i>Reset</button></div>
+
+      <h3>Firmware update</h3>
+      <form id=fwf class="row tight"><input type=file id=fwb accept=.bin aria-label="Firmware file"><button class=btnico><i data-lucide="upload" aria-hidden=true></i>Flash firmware</button><span id=fwmsg class=note></span></form>
+
+      <h3>Wi-Fi</h3>
+      <button onclick="if(confirm('Forget the saved Wi-Fi and reboot to set it up again?'))forgetWifi(event)">Forget Wi-Fi</button>
+      </div>
+    </div>
+  </div>
+</main>
+<div id=toasts aria-live=polite></div>
+<script type="text/javascript" src="https://cdn.jsdelivr.net/gh/vanjs-org/van/public/van-1.6.1.nomodule.min.js"></script>
+<script type="text/javascript" src="https://unpkg.com/lucide@1.57.0/dist/umd/lucide.min.js"></script>
+<script>
+const {div,span,td,tr,button,i,img} = van.tags
+const ic=n=>i({'data-lucide':n,'aria-hidden':'true'})
+const favImg=d=>img({class:'fav',src:'https://icons.duckduckgo.com/ip3/'+encodeURIComponent(d)+'.ico',loading:'lazy',width:16,height:16,alt:'','aria-hidden':'true',onerror:e=>{e.target.style.visibility='hidden'}})
+const LU=()=>{try{lucide.createIcons()}catch(_){}}
+const S = van.state(null)          // stats object
+const EV = van.state([])           // accumulated recent-blocked events
+const CQ = van.state(''), EQ = van.state('')
+const CS = van.state({key:'blocked',dir:-1})
+let evLast=0, lastOk=0, pauseEnd=0, rulesInit=0
+const CSRF_HDRS={'X-Requested-With':'esp-adblock'}
+function fmt(n){return (n|0).toLocaleString()}
+function toast(msg,err){const t=div({class:'toast'+(err?' err':'')},msg);toasts.appendChild(t);setTimeout(()=>t.remove(),2600)}
+function copyIP(){const t=dnsip.textContent,ok=()=>toast('IP copied');
+  if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(t).then(ok,fb);return}
+  fb();
+  function fb(){const a=document.createElement('textarea');a.value=t;a.setAttribute('readonly','');a.style.position='fixed';a.style.opacity='0';document.body.appendChild(a);a.select();
+    try{document.execCommand('copy')?ok():toast('Copy failed',1)}catch(_){toast('Copy failed',1)}a.remove()}}
+function testDns(e){const el=document.getElementById('dnstest');if(!el)return;if(e&&e.currentTarget)e.currentTarget.disabled=true;
+  el.className='note';el.textContent='testing…';
+  const n='t'+Math.random().toString(36).slice(2,10)+'.dnscheck';      // random subdomain defeats caches
+  const ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),4000);
+  fetch('http://'+n+'/__dnscheck',{mode:'no-cors',cache:'no-store',signal:ctl.signal})
+    .then(()=>{el.className='note ok';el.textContent='✓ this device is using this DNS';})
+    .catch(()=>{el.className='note bad';el.textContent='✗ not using this DNS (or secure-DNS/DoH is on)';})
+    .finally(()=>{clearTimeout(to);if(e&&e.currentTarget)e.currentTarget.disabled=false})}
+async function act(btn,url,ok){ if(btn)btn.disabled=true
+  try{ const r=await fetch(url,{headers:CSRF_HDRS}); toast(r.ok?(ok||'Done'):('Something failed ('+r.status+')'), !r.ok) }
+  catch(_){ toast('Network error',1) }
+  if(btn)btn.disabled=false; load() }
+const empty=(c,m)=>tr(td({class:'empty',colspan:c},m))
+const arrow=(st,k)=>st.key===k?(st.dir<0?'▼':'▲'):''
+const MUTED={style:'color:var(--muted)'}
+function setSort(ids,active,dir){for(const id of ids){const el=document.getElementById(id);if(el)el.setAttribute('aria-sort',id===active?(dir<0?'descending':'ascending'):'none')}}
+function setCS(k){const c=CS.val;const dir=c.key===k?-c.dir:-1;CS.val={key:k,dir};setSort(['th-ip','th-mac','th-blocked','th-allowed'],'th-'+k,dir);render()}
+
+// Imperative render: van.add(el, ...nodes) takes N children (arrays returned from a
+// function child are NOT flattened by VanJS, so we build the list ourselves).
+function render(){
+  const s=S.val
+  sum.replaceChildren(); dev.textContent=''
+  if(s){
+    const tot=(s.blocked+s.allowed)||1, pct=Math.round(s.blocked/tot*100)
+    van.add(sum,
+      div({class:'kpis'},
+        div({class:'kpi'},span({class:'kpi-n a'},fmt(s.blocked)),span({class:'kpi-l'},'blocked')),
+        div({class:'kpi'},span({class:'kpi-n'},fmt(s.allowed)),span({class:'kpi-l'},'allowed')),
+        div({class:'kpi'},span({class:'kpi-n'},fmt(s.domains)),span({class:'kpi-l'},'on the list'))),
+      div({class:'ratio','aria-hidden':'true'},span({class:'seg',style:'width:'+pct+'%'})),
+      div({class:'ratio-cap'},pct+'% of lookups blocked'))
+    dev.textContent='Wi-Fi '+s.rssi+' dBm'+(s.vcc?' · '+(s.vcc/1000).toFixed(2)+' V':'')+(s.dns?' · DNS '+s.dns+' ms':'')+(s.dnsTo?' · '+s.dnsTo+' timeout'+(s.dnsTo>1?'s':''):'')
+  }
+
+  const eb=document.querySelector('#evt tbody'); eb.replaceChildren()
+  { const q=EQ.val.toLowerCase(); let a=EV.val; if(q)a=a.filter(e=>e.host.includes(q))
+    evn.textContent=EV.val.length?'('+EV.val.length+')':''
+    if(a.length) van.add(eb,...a.slice(0,50).map(e=>tr(td(div({class:'host'},favImg(e.host),e.host)),td({class:'mono'},e.cip||''),td(MUTED,new Date(e.at).toLocaleTimeString()),td({style:'text-align:right'},button({class:'alw btnico','data-h':e.host},ic('check'),'allow')))))
+    else van.add(eb,empty(4,q?'No match':'Nothing blocked yet')) }
+
+  const cb=document.querySelector('#ct tbody'); cb.replaceChildren()
+  if(s){ const {key,dir}=CS.val, q=CQ.val.toLowerCase(); let cl=s.clients.slice()
+    cl.sort((x,y)=>((key==='ip'||key==='mac')?x[key].localeCompare(y[key]):(x[key]-y[key]))*dir)
+    if(q)cl=cl.filter(c=>c.ip.includes(q)||c.mac.includes(q))
+    if(cl.length) van.add(cb,...cl.map(c=>tr(td(c.ip),td(c.mac),td({class:'a'},fmt(c.blocked)),td(MUTED,fmt(c.allowed)))))
+    else van.add(cb,empty(4,q?'No match':'No devices seen yet')) }
+  document.getElementById('cs-ip').textContent=arrow(CS.val,'ip')
+  document.getElementById('cs-mac').textContent=arrow(CS.val,'mac')
+  document.getElementById('cs-blocked').textContent=arrow(CS.val,'blocked')
+  document.getElementById('cs-allowed').textContent=arrow(CS.val,'allowed')
+
+  const lb=document.querySelector('#cl tbody'); lb.replaceChildren()
+  if(s){ if((s.custom||[]).length) van.add(lb,...s.custom.map(d=>tr(td(div({class:'host'},favImg(d),d)),td({style:'text-align:right'},button({class:'rmbtn btnico','data-d':d},ic('trash-2'),'remove'))))); else van.add(lb,empty(2,'None yet')) }
+  const nb=document.querySelector('#ht tbody'); nb.replaceChildren()
+  if(s){ if((s.hosts||[]).length) van.add(nb,...s.hosts.map(e=>tr(td(e.n),td(e.ip),td({style:'text-align:right'},button({class:'hrm btnico','data-n':e.n},ic('trash-2'),'remove'))))); else van.add(nb,empty(3,'None yet')) }
+  const wb=document.querySelector('#wl tbody'); wb.replaceChildren()
+  if(s){ if((s.wild||[]).length) van.add(wb,...s.wild.map(d=>tr(td({class:'mono'},d),td({style:'text-align:right'},button({class:'rmwild btnico','data-d':d},ic('trash-2'),'remove'))))); else van.add(wb,empty(2,'None yet')) }
+  LU()
+}
+
+cfilter.oninput=e=>{CQ.val=e.currentTarget.value;render()}
+efilter.oninput=e=>{EQ.val=e.currentTarget.value;render()}
+
+async function load(){
+  let s; try{ s=await(await fetch('/stats.json')).json() }catch(_){ const l=document.getElementById('loadbar'); if(l)l.classList.remove('on'); return }
+  lastOk=Date.now()
+  if(s.ev&&s.ev.length){ let a=EV.val.slice(); for(const e of s.ev){ if(e.seq>evLast){ evLast=e.seq; a.unshift({host:e.host,cip:e.cip,at:Date.now()}) } } if(a.length>200)a.length=200; EV.val=a }
+  S.val=s; render()
+  const lbl=document.getElementById('loadbar'); if(lbl)lbl.classList.remove('on')
+  host.textContent='@ '+s.ip; dnsip.textContent=s.ip; if(s.ver)ver.textContent='v'+s.ver
+  credwarn.style.display=s.defcreds?'block':'none'
+  let on=s.blocking!==false; blockstate.dataset.on=on?'1':'0'
+  blockdot.replaceChildren(ic(on?'shield-check':'pause'))
+  pauseEnd=(!on&&s.resumeIn>0)?Date.now()+s.resumeIn*1000:0
+  blockstate.textContent=on?'Blocking active':(pauseEnd?'Paused…':'Paused')
+  pausebtn.replaceChildren(ic(on?'pause':'play'),document.createTextNode(on?'Pause':'Resume')); pausedurwrap.style.display=on?'':'none'
+  if(document.activeElement!=uurl)uurl.value=s.upurl||''
+  if(document.activeElement!=uiv)uiv.value=s.upiv||24
+  ustat.textContent=(s.upstat||'—')+(s.upat?' · '+Math.floor(s.upat/60)+'m ago':'')+(s.upnext?' · next '+Math.floor(s.upnext/60)+'m':'')
+  if(document.activeElement!=bmode)bmode.value=s.bmode===2?'nxdomain':s.bmode===1?'zero':'ip'
+  if(document.activeElement!=v4only)v4only.checked=!!s.v4only
+  if(document.activeElement!=kw)kw.checked=!!s.kw
+  if(document.activeElement!=rb)rb.checked=!!s.rb
+  if(document.activeElement!=ss)ss.checked=!!s.ss
+  if(document.activeElement!=shost)shost.value=s.syslog||''
+  if(document.activeElement!=sport)sport.value=s.sysport||514
+  if(!rulesInit){rulesInit=1;loadRulesFile()}    // pre-fill the /rules.cfg editor once
+  LU()
+}
+function togglePause(e){const on=blockstate.dataset.on=='1';act(e.currentTarget,on?'/pause?s='+pausedur.value:'/resume',on?'Blocking paused':'Blocking resumed')}
+function addDom(e){let d=dom.value.trim();if(d){act(e.currentTarget,'/addblock?d='+encodeURIComponent(d),'Added to blocklist');dom.value=''}}
+function saveSyslog(e){act(e.currentTarget,'/setsyslog?h='+encodeURIComponent(shost.value.trim())+'&p='+(parseInt(sport.value)||514),'Syslog saved')}
+function addHost(e){let n=hname.value.trim(),ip=hip.value.trim();if(n&&ip){act(e.currentTarget,'/sethost?n='+encodeURIComponent(n)+'&ip='+encodeURIComponent(ip),'Name added');hname.value='';hip.value=''}}
+bmode.onchange=()=>act(null,'/setblock?m='+bmode.value,'Saved')
+function saveV4(e){act(e.currentTarget,'/setblock?v4='+(v4only.checked?'1':'0'),'Saved')}
+function saveKw(e){act(e.currentTarget,'/setblock?kw='+(kw.checked?'1':'0'),'Saved')}
+function saveRb(e){act(e.currentTarget,'/setblock?rb='+(rb.checked?'1':'0'),'Saved')}
+function saveSs(e){act(e.currentTarget,'/setblock?ss='+(ss.checked?'1':'0'),'Saved')}
+function addWild(e){let d=wild.value.trim();if(d){act(e.currentTarget,'/addblock?d='+encodeURIComponent(d),'Wildcard added');wild.value=''}}
+async function loadRulesFile(){rulesmsg.textContent='…';try{const r=await fetch('/rules',{headers:CSRF_HDRS});rules.value=await r.text();rulesmsg.textContent=''}catch(_){rulesmsg.textContent='load failed'}}
+async function saveRulesFile(){rulesmsg.textContent='saving…';try{const r=await fetch('/rules',{method:'POST',headers:{'X-Requested-With':'esp-adblock','Content-Type':'text/plain'},body:rules.value});rulesmsg.textContent=r.ok?'saved':'error '+r.status;if(r.ok)load()}catch(_){rulesmsg.textContent='save failed'}}
+ht.addEventListener('click',e=>{const b=e.target.closest('.hrm');if(b)act(b,'/delhost?n='+encodeURIComponent(b.dataset.n),'Removed')})
+evt.addEventListener('click',e=>{const b=e.target.closest('.alw');if(b)act(b,'/allow?d='+encodeURIComponent(b.dataset.h),'Allowed')})
+cl.addEventListener('click',e=>{const b=e.target.closest('.rmbtn');if(b)act(b,'/unblock?d='+encodeURIComponent(b.dataset.d),'Removed')})
+wl.addEventListener('click',e=>{const b=e.target.closest('.rmwild');if(b)act(b,'/unblock?d='+encodeURIComponent(b.dataset.d),'Removed')})
+function advOpen(){adv.hidden=false;try{lucide.createIcons()}catch(_){}}
+function advClose(){adv.hidden=true}
+adv.addEventListener('click',e=>{if(e.target===adv)advClose()})              // click on the backdrop closes
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!adv.hidden)advClose()})
+function saveUpd(e){act(e.currentTarget,'/setupdate?u='+encodeURIComponent(uurl.value.trim())+'&h='+(parseInt(uiv.value)||24),'Saved')}
+function fetchNow(e){if(e)e.currentTarget.disabled=true;ustat.textContent='Fetching…';fetch('/fetchnow',{headers:CSRF_HDRS}).then(r=>r.text()).then(t=>{ustat.textContent=t;toast(t,!t.startsWith('ok'));if(e)e.currentTarget.disabled=false;load()}).catch(()=>{toast('Network error',1);if(e)e.currentTarget.disabled=false})}
+function resetStats(e){if(confirm('Reset all counters, per-client counts and the recent-blocked list?'))act(e.currentTarget,'/resetstats','Counters reset')}
+function forgetWifi(e){act(e.currentTarget,'/forgetwifi','Rebooting to set up Wi-Fi…')}
+fwf.onsubmit=async e=>{e.preventDefault();let f=fwb.files[0];if(!f)return;const b=fwf.querySelector('button');b.disabled=true;fwmsg.textContent='Flashing '+(f.size/1048576).toFixed(2)+' MB…';
+  let fd=new FormData();fd.append('f',f);
+  try{let r=await fetch('/update',{method:'POST',headers:CSRF_HDRS,body:fd});fwmsg.textContent=r.ok?'✓ Rebooting, reconnect in ~15s':'✗ '+await r.text()}catch(_){fwmsg.textContent='✓ Rebooting, reconnect in ~15s'}b.disabled=false}
+upf.onsubmit=async e=>{e.preventDefault();let f=blf.files[0];if(!f)return;const b=upf.querySelector('button');b.disabled=true;upmsg.textContent='Uploading '+(f.size/1048576).toFixed(2)+' MB…';
+  let fd=new FormData();fd.append('f',f);
+  try{let r=await fetch('/upload',{method:'POST',headers:CSRF_HDRS,body:fd});upmsg.textContent=r.ok?'✓ Updated':'✗ '+await r.text()}catch(_){upmsg.textContent='✗ Upload failed'}b.disabled=false
+  blf.value='';setTimeout(load,600)}
+
+setInterval(()=>{
+  const ago=lastOk?Math.round((Date.now()-lastOk)/1000):-1
+  const fresh=ago>=0&&ago<8
+  conn.textContent=!lastOk?'connecting…':(fresh?('online · '+ago+'s'):'offline')
+  conn.className='badge '+(fresh?'on':(lastOk?'off':''))
+  if(pauseEnd>0){const r=Math.max(0,Math.ceil((pauseEnd-Date.now())/1000));if(r>0)blockstate.textContent='Paused — resumes in '+r+'s';else pauseEnd=0}
+},1000)
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)load()})
+load();setInterval(()=>{if(!document.hidden)load()},3000);
+</script></body></html>
