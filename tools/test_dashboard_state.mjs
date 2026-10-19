@@ -9,10 +9,26 @@ const html = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8')
 const src = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].pop()[1]
 
 const STATS = {
-  boot: 1, ip: '192.168.0.2', ver: '1.0', blocked: 750, allowed: 250, domains: 1000,
-  gafam: [40, 10, 20, 10, 10, 10], dnss: [90, 100], pl: 2, ph: 6, pht: 10, php: 42, psv: 70,
-  rssi: -50, dns: 20,
-  geo: [['US', 100], ['BR', 50]], geoMapped: 150,
+  boot: 1,
+  ip: '192.168.0.2',
+  ver: '1.0',
+  blocked: 750,
+  allowed: 250,
+  domains: 1000,
+  gafam: [40, 10, 20, 10, 10, 10],
+  dnss: [90, 100],
+  pl: 2,
+  ph: 6,
+  pht: 10,
+  php: 42,
+  psv: 70,
+  rssi: -50,
+  dns: 20,
+  geo: [
+    ['US', 100],
+    ['BR', 50],
+  ],
+  geoMapped: 150,
   clients: [
     { ip: '10.0.0.3', mac: 'aa:aa', name: 'TV', blocked: 5, allowed: 50, ps: 0 },
     { ip: '10.0.0.2', mac: 'bb:bb', name: '', blocked: 9, allowed: 1, ps: 120 },
@@ -21,10 +37,18 @@ const STATS = {
     { seq: 1, host: 'track.example', cip: '10.0.0.3' },
     { seq: 2, host: 'ads.example', cip: '10.0.0.2' },
   ],
-  custom: ['a.example'], wild: [], hosts: [],
+  custom: ['a.example'],
+  wild: [],
+  hosts: [],
 }
 
-const el = () => ({ classList: { add() {}, remove() {} }, innerHTML: '', textContent: '', style: {}, querySelectorAll: () => [] })
+const el = () => ({
+  classList: { add() {}, remove() {} },
+  innerHTML: '',
+  textContent: '',
+  style: {},
+  querySelectorAll: () => [],
+})
 const document = {
   getElementById: () => el(),
   querySelector: () => null,
@@ -35,20 +59,37 @@ const document = {
   body: { appendChild() {} },
 }
 const storage = () => ({ getItem: () => null, setItem() {}, removeItem() {} })
-const fetchStub = async (url) => url === '/stats.json'
-  ? { status: 200, ok: true, json: async () => STATS }
-  : { status: 200, ok: true, text: async () => '' }
+const fetchStub = async (url) =>
+  url === '/stats.json'
+    ? { status: 200, ok: true, json: async () => STATS }
+    : { status: 200, ok: true, text: async () => '' }
 
 const factory = new Function(
-  'window', 'document', 'localStorage', 'sessionStorage', 'location', 'fetch',
-  'setInterval', 'setTimeout', 'MutationObserver', 'navigator',
+  'window',
+  'document',
+  'localStorage',
+  'sessionStorage',
+  'location',
+  'fetch',
+  'setInterval',
+  'setTimeout',
+  'MutationObserver',
+  'navigator',
   `${src}\nreturn { state, load, fmt, fmtc }`,
 )
 const app = factory(
-  { addEventListener() {} }, document, storage(), storage(),
-  { reload() {} }, fetchStub,
-  () => 0, (fn, d) => (d === 0 ? queueMicrotask(fn) : 0),
-  class { observe() {} }, {},
+  { addEventListener() {} },
+  document,
+  storage(),
+  storage(),
+  { reload() {} },
+  fetchStub,
+  () => 0,
+  (fn, d) => (d === 0 ? queueMicrotask(fn) : 0),
+  class {
+    observe() {}
+  },
+  {},
 )
 
 await app.load()
@@ -75,20 +116,37 @@ assert.equal(state.geoTop[1].cc, 'BR')
 assert.ok(state.geoFoot.includes('150'), 'footer reports mapped lookups')
 
 // elenco derivado: sort default blocked desc, then filter
-assert.deepEqual(state.shownClients.map((c) => c.ip), ['10.0.0.2', '10.0.0.3'])
+assert.deepEqual(
+  state.shownClients.map((c) => c.ip),
+  ['10.0.0.2', '10.0.0.3'],
+)
 state.qc = 'tv'
-assert.deepEqual(state.shownClients.map((c) => c.ip), ['10.0.0.3'], 'filter by name, case-insensitive')
+assert.deepEqual(
+  state.shownClients.map((c) => c.ip),
+  ['10.0.0.3'],
+  'filter by name, case-insensitive',
+)
 state.qc = ''
 state.setSort('blocked')
 assert.equal(state.sortDir, 1, 'clicking the active column flips direction')
-assert.deepEqual(state.shownClients.map((c) => c.ip), ['10.0.0.3', '10.0.0.2'])
+assert.deepEqual(
+  state.shownClients.map((c) => c.ip),
+  ['10.0.0.3', '10.0.0.2'],
+)
 assert.equal(state.sortAria('blocked'), 'ascending')
 assert.equal(state.arrow('blocked'), '▲')
 
 // eventos recentes: filtro + ordem
-assert.deepEqual(state.shownEvents.map((e) => e.seq), [2, 1], 'newest first')
+assert.deepEqual(
+  state.shownEvents.map((e) => e.seq),
+  [2, 1],
+  'newest first',
+)
 state.qe = 'ads'
-assert.deepEqual(state.shownEvents.map((e) => e.host), ['ads.example'])
+assert.deepEqual(
+  state.shownEvents.map((e) => e.host),
+  ['ads.example'],
+)
 state.qe = ''
 
 // status / formatação

@@ -40,7 +40,10 @@ function harness(fetchImpl, store = {}) {
     removeItem: (k) => delete store[k],
   }
   const factory = new Function(
-    'fetch', 'document', 'sessionStorage', 'location',
+    'fetch',
+    'document',
+    'sessionStorage',
+    'location',
     `${PREAMBLE}\n${body}\nreturn {load, boot, err:()=>lastErr}`,
   )
   return {
@@ -68,21 +71,31 @@ function harness(fetchImpl, store = {}) {
 
 // 3. a thrown fetch is a real network error
 {
-  const { api } = harness(async () => { throw new Error('boom') })
+  const { api } = harness(async () => {
+    throw new Error('boom')
+  })
   await api.load()
   assert.match(api.boot.innerHTML, /Can not reach the device/)
 }
 
 // 4. sticky: once a 401 was seen, a later flaky fetch still shows the login hint
 {
-  const { api } = harness(async () => { throw new Error('boom') }, { authRL: '1', auth401: '1' })
+  const { api } = harness(
+    async () => {
+      throw new Error('boom')
+    },
+    { authRL: '1', auth401: '1' },
+  )
   await api.load()
   assert.match(api.boot.innerHTML, /Login required/)
 }
 
 // 5. success clears both flags, hides the overlay and shows no error
 {
-  const { api, store } = harness(async () => ({ status: 200, ok: true, json: async () => ({ boot: 1, ev: [] }) }), { authRL: '1', auth401: '1' })
+  const { api, store } = harness(async () => ({ status: 200, ok: true, json: async () => ({ boot: 1, ev: [] }) }), {
+    authRL: '1',
+    auth401: '1',
+  })
   await api.load()
   assert.equal(store.authRL, undefined, 'authRL cleared on success')
   assert.equal(store.auth401, undefined, 'auth401 cleared on success')

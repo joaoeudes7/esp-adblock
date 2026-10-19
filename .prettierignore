@@ -1,0 +1,8 @@
+# Vendored/minified third-party code
+web/alpine.min.js
+web/van.min.js
+
+# Generated assets (build_geo_table.py / build_world_svg.py / build_installer.py)
+web/world.svg
+installer/fw/
+installer/manifest.json

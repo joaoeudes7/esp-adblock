@@ -90,6 +90,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
+      - name: formatting (Prettier)
+        run: npx --yes prettier@3.6.2 --check web/index.html web/blocked.html installer/index.html tools/*.mjs
       - name: dashboard auth/offline messaging (node)
         run: node tools/test_dashboard_auth.mjs
       - name: dashboard derived state (node)

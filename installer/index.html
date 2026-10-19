@@ -1,671 +1,1052 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ESP AdBlock — Web Installer</title>
-<style>
-:root{
-  --bg:#0d1117; --surface:#161b22; --panel:#1c2128; --panel-hover:#272e38; --line:#30363d;
-  --ink:#e6edf3; --muted:#9aa4b2; --ok:#3fb950; --ok-soft:#2a5a37; --bad:#e5534b; --bad-soft:#5a2a2a;
-  --warn:#e3b341; --warn-bg:#2a1717; --warn-line:#6e2b28; --warn-ink:#ffd9d5;
-  --lead:#0f2318; --r:10px;
-}
-*{box-sizing:border-box}
-body{font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;margin:0;background:var(--bg);color:var(--ink)}
-header{display:flex;align-items:center;gap:10px;background:var(--surface);padding:14px 18px;border-bottom:1px solid var(--line)}
-header h1{margin:0;font-size:16px;font-weight:650;letter-spacing:-.01em}
-header .sub{color:var(--muted);font-size:12px}
-main{padding:18px;max-width:780px;margin:auto}
-section{margin-bottom:22px}
-h2{font-size:14px;font-weight:600;margin:0 0 10px;display:flex;align-items:center;gap:8px}
-h2 .n{background:var(--panel);border:1px solid var(--line);border-radius:999px;width:22px;height:22px;
-  display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:var(--muted)}
-.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px}
-.card.lead{background:var(--lead);border-color:var(--ok-soft)}
-.card.warn{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-ink);font-size:13px}
-.note{color:var(--muted);font-size:12.5px;line-height:1.5;margin:8px 0 0}
-.mono{font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace}
-.row{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
-.row.tight{gap:8px}
-label.f{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--muted)}
-label.f input,label.f select{width:100%}
-input,select{font:inherit;background:var(--bg);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:8px 9px}
-input::placeholder{color:var(--muted)}
-input:focus-visible,select:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var(--ok);outline-offset:2px}
-button{font:inherit;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:var(--r);
-  padding:7px 13px;cursor:pointer;transition:background .15s,border-color .15s}
-button:hover:not(:disabled){background:var(--panel-hover)}
-button:disabled{opacity:.5;cursor:default}
-button.primary{background:#1f6f3d;border-color:#2ea043;font-weight:600}
-button.primary:hover:not(:disabled){background:#238636}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-@media(max-width:560px){.grid{grid-template-columns:1fr}}
-#log{background:#0a0e13;border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:12px;
-  height:180px;overflow:auto;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;
-  color:var(--muted);white-space:pre-wrap;word-break:break-word}
-#log .ok{color:var(--ok)} #log .bad{color:var(--bad)} #log .info{color:var(--ink)}
-.progress{height:8px;background:var(--line);border-radius:99px;overflow:hidden;margin-top:12px;display:none}
-.progress>i{display:block;height:100%;width:0;background:var(--ok);transition:width .15s}
-.badge{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:3px 10px;white-space:nowrap}
-.badge.ok{color:var(--ok);border-color:var(--ok-soft)}
-.badge.bad{color:var(--bad);border-color:var(--bad-soft)}
-summary{cursor:pointer;color:var(--muted);font-size:12.5px;margin-top:10px}
-details[open] summary{color:var(--ink)}
-a{color:#58a6ff}
-.result{display:none;margin-top:12px}
-.result b{font-size:18px}
-.spacer{flex:1}
-kbd{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:0 5px;font-size:11px}
-</style>
-</head>
-<body>
-<header>
-  <h1>ESP AdBlock</h1>
-  <span class="sub">Web Installer</span>
-  <span class="spacer"></span>
-  <span id="support" class="badge">checking…</span>
-</header>
-
-<main>
-  <div id="unsupported" class="card warn" hidden>
-    This browser has neither <b>Web Serial</b> nor <b>WebUSB</b>. Use Chrome, Edge or another Chromium
-    browser on desktop, served over HTTPS or localhost. (Firefox, Safari and mobile are not supported.)
-  </div>
-
-  <div id="manifest-warn" class="card warn" hidden>
-    <b>manifest.json not found.</b> Build the installers first:
-    <div class="mono" style="margin-top:6px">python3 tools/build_installer.py</div>
-    then serve this folder (for example <span class="mono">python3 -m http.server -d installer 8000</span>).
-  </div>
-
-  <section>
-    <h2><span class="n">1</span> Install firmware</h2>
-    <div class="card">
-      <div class="grid">
-        <label class="f">Board
-          <select id="board"></select>
-        </label>
-        <label class="f">Firmware
-          <input id="fwver" value="loading…" readonly>
-        </label>
-      </div>
-      <div class="row" style="margin-top:12px">
-        <label class="row tight" style="font-size:12.5px;color:var(--muted)">
-          <input type="checkbox" id="erase" checked> Erase flash before install (recommended)
-        </label>
-      </div>
-      <div class="row" style="margin-top:14px">
-        <button id="install" class="primary" disabled>Connect &amp; install</button>
-        <span class="note" style="margin:0">Hold <b>BOOT</b> and tap <b>RST</b> if the board is not detected.</span>
-      </div>
-      <div id="flashbar" class="progress" role="progressbar" aria-label="Flash progress"
-           aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
-      <div id="log" role="log" aria-live="polite"></div>
-    </div>
-  </section>
-
-  <section>
-    <h2><span class="n">2</span> Configure Wi-Fi</h2>
-    <div class="card">
-      <p class="note" style="margin-top:0">
-        After installing, the device listens on the USB port for its Wi-Fi config
-        (<b>Improv Wi-Fi</b>, the same protocol ESP Web Tools/Tasmota use). Keep it plugged in.
-      </p>
-      <div class="grid">
-        <label class="f">Wi-Fi name (SSID)
-          <input id="ssid" list="ssidlist" autocomplete="off" placeholder="MyNetwork">
-          <datalist id="ssidlist"></datalist>
-        </label>
-        <label class="f">Password
-          <input id="pass" type="password" autocomplete="new-password" placeholder="••••••••">
-        </label>
-        <label class="f">Hostname <span style="font-size:11px">(applies after reboot)</span>
-          <input id="host" value="esp-adblock" autocomplete="off">
-        </label>
-        <div class="f" style="justify-content:flex-end">
-          <button id="scan" disabled>Scan networks</button>
-        </div>
-      </div>
-      <details>
-        <summary>Advanced — static IP (uses the text fallback protocol)</summary>
-        <p class="note">Filling any of these switches off Improv and sends the config as
-          <span class="mono">CFG <i>key</i> <i>value</i></span> lines instead. Leave empty to stay on Improv / DHCP.</p>
-        <div class="grid">
-          <label class="f">Static IP
-            <input id="ip" placeholder="192.168.1.50" autocomplete="off">
-          </label>
-          <label class="f">Gateway
-            <input id="gw" placeholder="192.168.1.1" autocomplete="off">
-          </label>
-          <label class="f">Upstream DNS
-            <input id="dns" placeholder="9.9.9.9" autocomplete="off">
-          </label>
-        </div>
-      </details>
-      <div class="row" style="margin-top:14px">
-        <button id="configure" disabled>Send config over USB</button>
-        <span id="device" class="badge" hidden></span>
-        <span id="cfgstate" class="note" style="margin:0"></span>
-      </div>
-      <div id="result" class="result">
-        <div class="note" style="margin:0">Wi-Fi connected. Open the dashboard:</div>
-        <div><a id="dashlink" target="_blank" rel="noopener"><b></b></a></div>
-        <div class="note">Default login is <span class="mono">admin</span> / <span class="mono">change-me-please</span> — change it in the dashboard, or bake a real password with <span class="mono">config.env</span>.</div>
-      </div>
-    </div>
-  </section>
-
-  <section>
-    <h2><span class="n">3</span> Prefer configs baked into the image?</h2>
-    <div class="card">
-      <p class="note" style="margin:0">
-        The firmware reads <span class="mono">/wifi.cfg</span> (baked from <span class="mono">config.env</span>) and
-        <span class="mono">secrets.h</span> before falling back to runtime provisioning. To ship a pre-configured
-        image instead of using step 2, fill <span class="mono">config.env</span>, rebuild, then re-run
-        <span class="mono">tools/build_installer.py</span>:
-      </p>
-      <div class="mono" style="margin-top:8px;line-height:1.7">
-        cp config.env.example config.env &nbsp;# edit it<br>
-        pio run -e esp8266 &amp;&amp; pio run -t buildfs -e esp8266<br>
-        python3 tools/build_installer.py
-      </div>
-      <p class="note">Use this only for a trusted build you control — the credentials end up inside the public <span class="mono">.bin</span>.</p>
-    </div>
-  </section>
-</main>
-
-<script type="module">
-import { ESPLoader, Transport, WebUSBSerialPort } from "./vendor/esptool-js.js";
-
-const $ = (id) => document.getElementById(id);
-const logEl = $("log");
-const flashbar = $("flashbar");
-const installBtn = $("install");
-const cfgBtn = $("configure");
-const scanBtn = $("scan");
-const HAS_SERIAL = "serial" in navigator;
-const HAS_USB = "usb" in navigator;
-const enc = new TextEncoder();
-const dec = new TextDecoder();
-
-let manifest = null;
-let port = null;
-let busy = false;
-let session = null;          // { reader, writer, improv, detected }
-let textSaved = false;       // set by the read loop when CFGSAVED arrives
-
-function log(msg, cls) {
-  const line = document.createElement("div");
-  if (cls) line.className = cls;
-  line.textContent = msg;
-  logEl.appendChild(line);
-  logEl.scrollTop = logEl.scrollHeight;
-}
-
-function setProgress(pct) {
-  flashbar.style.display = pct == null ? "none" : "block";
-  if (pct != null) {
-    const v = Math.max(0, Math.min(100, pct));
-    flashbar.firstElementChild.style.width = v + "%";
-    flashbar.setAttribute("aria-valuenow", String(Math.round(v)));
-  }
-}
-
-// ---------- MD5 (WebCrypto has no MD5; esptool-js wants one to verify the flash) ----------
-function md5hex(bytes) {
-  const rl = (n, c) => (n << c) | (n >>> (32 - c));
-  const au = (x, y) => { const l = (x & 0xffff) + (y & 0xffff); return (((x >> 16) + (y >> 16) + (l >> 16)) << 16) | (l & 0xffff); };
-  const cmn = (q, a, b, x, s, t) => au(rl(au(au(a, q), au(x, t)), s), b);
-  const ff = (a, b, c, d, x, s, t) => cmn((b & c) | (~b & d), a, b, x, s, t);
-  const gg = (a, b, c, d, x, s, t) => cmn((b & d) | (c & ~d), a, b, x, s, t);
-  const hh = (a, b, c, d, x, s, t) => cmn(b ^ c ^ d, a, b, x, s, t);
-  const ii = (a, b, c, d, x, s, t) => cmn(c ^ (b | ~d), a, b, x, s, t);
-  let str = "";
-  for (let i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i]);
-  const x = [];
-  for (let i = 0; i < str.length * 8; i += 8) x[i >> 5] = (x[i >> 5] || 0) | ((str.charCodeAt(i / 8) & 0xff) << (i % 32));
-  const len = str.length * 8;
-  x[len >> 5] = (x[len >> 5] || 0) | (0x80 << (len % 32));
-  x[(((len + 64) >>> 9) << 4) + 14] = len;
-  let a = 1732584193, b = -271733879, c = -1732584194, d = 271733878;
-  for (let i = 0; i < x.length; i += 16) {
-    const oa = a, ob = b, oc = c, od = d;
-    a = ff(a, b, c, d, x[i] | 0, 7, -680876936); d = ff(d, a, b, c, x[i + 1] | 0, 12, -389564586);
-    c = ff(c, d, a, b, x[i + 2] | 0, 17, 606105819); b = ff(b, c, d, a, x[i + 3] | 0, 22, -1044525330);
-    a = ff(a, b, c, d, x[i + 4] | 0, 7, -176418897); d = ff(d, a, b, c, x[i + 5] | 0, 12, 1200080426);
-    c = ff(c, d, a, b, x[i + 6] | 0, 17, -1473231341); b = ff(b, c, d, a, x[i + 7] | 0, 22, -45705983);
-    a = ff(a, b, c, d, x[i + 8] | 0, 7, 1770035416); d = ff(d, a, b, c, x[i + 9] | 0, 12, -1958414417);
-    c = ff(c, d, a, b, x[i + 10] | 0, 17, -42063); b = ff(b, c, d, a, x[i + 11] | 0, 22, -1990404162);
-    a = ff(a, b, c, d, x[i + 12] | 0, 7, 1804603682); d = ff(d, a, b, c, x[i + 13] | 0, 12, -40341101);
-    c = ff(c, d, a, b, x[i + 14] | 0, 17, -1502002290); b = ff(b, c, d, a, x[i + 15] | 0, 22, 1236535329);
-    a = gg(a, b, c, d, x[i + 1] | 0, 5, -165796510); d = gg(d, a, b, c, x[i + 6] | 0, 9, -1069501632);
-    c = gg(c, d, a, b, x[i + 11] | 0, 14, 643717713); b = gg(b, c, d, a, x[i] | 0, 20, -373897302);
-    a = gg(a, b, c, d, x[i + 5] | 0, 5, -701558691); d = gg(d, a, b, c, x[i + 10] | 0, 9, 38016083);
-    c = gg(c, d, a, b, x[i + 15] | 0, 14, -660478335); b = gg(b, c, d, a, x[i + 4] | 0, 20, -405537848);
-    a = gg(a, b, c, d, x[i + 9] | 0, 5, 568446438); d = gg(d, a, b, c, x[i + 14] | 0, 9, -1019803690);
-    c = gg(c, d, a, b, x[i + 3] | 0, 14, -187363961); b = gg(b, c, d, a, x[i + 8] | 0, 20, 1163531501);
-    a = gg(a, b, c, d, x[i + 13] | 0, 5, -1444681467); d = gg(d, a, b, c, x[i + 2] | 0, 9, -51403784);
-    c = gg(c, d, a, b, x[i + 7] | 0, 14, 1735328473); b = gg(b, c, d, a, x[i + 12] | 0, 20, -1926607734);
-    a = hh(a, b, c, d, x[i + 5] | 0, 4, -378558); d = hh(d, a, b, c, x[i + 8] | 0, 11, -2022574463);
-    c = hh(c, d, a, b, x[i + 11] | 0, 16, 1839030562); b = hh(b, c, d, a, x[i + 14] | 0, 23, -35309556);
-    a = hh(a, b, c, d, x[i + 1] | 0, 4, -1530992060); d = hh(d, a, b, c, x[i + 4] | 0, 11, 1272893353);
-    c = hh(c, d, a, b, x[i + 7] | 0, 16, -155497632); b = hh(b, c, d, a, x[i + 10] | 0, 23, -1094730640);
-    a = hh(a, b, c, d, x[i + 13] | 0, 4, 681279174); d = hh(d, a, b, c, x[i] | 0, 11, -358537222);
-    c = hh(c, d, a, b, x[i + 3] | 0, 16, -722521979); b = hh(b, c, d, a, x[i + 6] | 0, 23, 76029189);
-    a = hh(a, b, c, d, x[i + 9] | 0, 4, -640364487); d = hh(d, a, b, c, x[i + 12] | 0, 11, -421815835);
-    c = hh(c, d, a, b, x[i + 15] | 0, 16, 530742520); b = hh(b, c, d, a, x[i + 2] | 0, 23, -995338651);
-    a = ii(a, b, c, d, x[i] | 0, 6, -198630844); d = ii(d, a, b, c, x[i + 7] | 0, 10, 1126891415);
-    c = ii(c, d, a, b, x[i + 14] | 0, 15, -1416354905); b = ii(b, c, d, a, x[i + 5] | 0, 21, -57434055);
-    a = ii(a, b, c, d, x[i + 12] | 0, 6, 1700485571); d = ii(d, a, b, c, x[i + 3] | 0, 10, -1894986606);
-    c = ii(c, d, a, b, x[i + 10] | 0, 15, -1051523); b = ii(b, c, d, a, x[i + 1] | 0, 21, -2054922799);
-    a = ii(a, b, c, d, x[i + 8] | 0, 6, 1873313359); d = ii(d, a, b, c, x[i + 15] | 0, 10, -30611744);
-    c = ii(c, d, a, b, x[i + 6] | 0, 15, -1560198380); b = ii(b, c, d, a, x[i + 13] | 0, 21, 1309151649);
-    a = ii(a, b, c, d, x[i + 4] | 0, 6, -145523070); d = ii(d, a, b, c, x[i + 11] | 0, 10, -1120210379);
-    c = ii(c, d, a, b, x[i + 2] | 0, 15, 718787259); b = ii(b, c, d, a, x[i + 9] | 0, 21, -343485551);
-    a = au(a, oa); b = au(b, ob); c = au(c, oc); d = au(d, od);
-  }
-  const hex = (n) => { let s = ""; for (let j = 0; j < 4; j++) s += ("0" + ((n >> (j * 8)) & 0xff).toString(16)).slice(-2); return s; };
-  return hex(a) + hex(b) + hex(c) + hex(d);
-}
-
-// ---------- Improv Wi-Fi Serial client (https://www.improv-wifi.com/serial/) ----------
-const RPC = { SET_WIFI: 0x01, STATE: 0x02, INFO: 0x03, SCAN: 0x04, HOST: 0x05 };
-const STATE = { STOPPED: 0x00, READY: 0x02, PROVISIONING: 0x03, PROVISIONED: 0x04 };
-const ERROR = { 0x00: "no error", 0x01: "invalid packet", 0x02: "unknown command", 0x03: "unable to connect", 0x05: "bad hostname", 0xff: "unknown error" };
-
-class Improv {
-  constructor(send) {
-    this.send = send;
-    this.state = null;
-    this.error = 0;
-    this._p = null;              // { cmd, multi, items, resolve, reject }
-  }
-  _packet(type, data) {
-    const p = new Uint8Array(9 + data.length + 2);
-    p.set(enc.encode("IMPROV"), 0);
-    p[6] = 1; p[7] = type; p[8] = data.length;
-    p.set(data, 9);
-    let cs = 0;
-    for (let i = 0; i < 9 + data.length; i++) cs += p[i];
-    p[9 + data.length] = cs & 0xff;
-    p[10 + data.length] = 10;
-    return p;
-  }
-  rpc(cmd, data = [], { multi = false, timeoutMs = 6000 } = {}) {
-    const payload = [cmd, data.length, ...data];
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this._p = null; reject(new Error("Improv timeout")); }, timeoutMs);
-      this._p = {
-        cmd, multi, items: [],
-        resolve: (v) => { clearTimeout(timer); this._p = null; resolve(v); },
-        reject: (e) => { clearTimeout(timer); this._p = null; reject(e); },
-      };
-      this.send(this._packet(0x03, payload));
-    });
-  }
-  handle(pkt) {
-    if (pkt[6] !== 1) return;
-    const type = pkt[7], len = pkt[8];
-    let cs = 0;
-    for (let i = 0; i < 9 + len; i++) cs += pkt[i];
-    if ((cs & 0xff) !== pkt[9 + len]) return;   // bad checksum: ignore
-    const data = Array.from(pkt.slice(9, 9 + len));
-    if (type === 0x01) {
-      this.state = data[0];
-      // REQUEST_CURRENT_STATE only gets an RPC result when provisioned; resolve otherwise.
-      if (this._p && this._p.cmd === RPC.STATE) {
-        const p = this._p;
-        setTimeout(() => { if (this._p === p) p.resolve([""]); }, 400);
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>ESP AdBlock — Web Installer</title>
+    <style>
+      :root {
+        --bg: #0d1117;
+        --surface: #161b22;
+        --panel: #1c2128;
+        --panel-hover: #272e38;
+        --line: #30363d;
+        --ink: #e6edf3;
+        --muted: #9aa4b2;
+        --ok: #3fb950;
+        --ok-soft: #2a5a37;
+        --bad: #e5534b;
+        --bad-soft: #5a2a2a;
+        --warn: #e3b341;
+        --warn-bg: #2a1717;
+        --warn-line: #6e2b28;
+        --warn-ink: #ffd9d5;
+        --lead: #0f2318;
+        --r: 10px;
       }
-    } else if (type === 0x02) {
-      this.error = data[0];
-      if (this._p) this._p.reject(new Error("device: " + (ERROR[data[0]] || ("error " + data[0]))));
-    } else if (type === 0x04) {
-      if (!this._p || this._p.cmd !== data[0]) return;
-      const strings = [];
-      let i = 2;
-      const total = data[1];
-      while (i < 2 + total) { strings.push(dec.decode(new Uint8Array(data.slice(i + 1, i + 1 + data[i])))); i += data[i] + 1; }
-      if (this._p.multi) {
-        if (strings.length) this._p.items.push(strings);
-        else this._p.resolve(this._p.items);      // empty list = end of stream
-      } else {
-        this._p.resolve(strings);
+      * {
+        box-sizing: border-box;
       }
-    }
-  }
-}
-
-// ---------- serial session (shared read loop for Improv + text CFG) ----------
-async function requestDevice() {
-  if (port) return port;
-  if (HAS_SERIAL) {
-    const granted = await navigator.serial.getPorts();
-    if (granted.length === 1) { log("reusing previously granted serial port", "info"); port = granted[0]; return port; }
-    port = await navigator.serial.requestPort();
-    return port;
-  }
-  const wusb = await WebUSBSerialPort.requestPort();   // CH340/CH341 via WebUSB
-  port = wusb.asSerialPort();
-  return port;
-}
-
-async function openSession() {
-  if (session) return session;
-  const p = await requestDevice();
-  if (p.readable || p.writable) throw new Error("serial port busy — unplug/replug the board and retry");
-  await p.open({ baudRate: 115200 });
-  const writer = p.writable.getWriter();
-  const reader = p.readable.getReader();
-  const s = { writer, reader, improv: null };
-  s.improv = new Improv((u8) => writer.write(u8));
-  session = s;
-  readLoop(s);
-  return s;
-}
-
-async function closeSession() {
-  const s = session;
-  session = null;
-  if (!s) return;
-  try { await s.reader.cancel(); } catch {}
-  try { s.reader.releaseLock(); } catch {}
-  try { s.writer.releaseLock(); } catch {}
-  try { await port.close(); } catch {}
-}
-
-// Byte pump: Improv packets are framed ("IMPROV" + ver + type + len + data + checksum);
-// anything else is a text line from the firmware log / CFG protocol.
-function readLoop(s) {
-  let line = [];
-  let improv = false, need = 0;
-  const pump = (async () => {
-    while (session === s) {
-      const { value, done } = await s.reader.read();
-      if (done) break;
-      for (const b of value) {
-        if (!improv) {
-          if (b === 10) {
-            const t = dec.decode(new Uint8Array(line)).replace(/\r/g, "").trim();
-            line = [];
-            if (!t) continue;
-            log(t);
-            if (t.includes("CFGSAVED")) textSaved = true;
-            const m = t.match(/WiFi up:\s*(\d+\.\d+\.\d+\.\d+)/);
-            if (m) $("dashlink").dataset.ip = m[1];
-            continue;
-          }
-          line.push(b);
-          if (line.length > 512) line = [];
-          if (line.length === 9 && dec.decode(new Uint8Array(line.slice(0, 6))) === "IMPROV") {
-            improv = true; need = 9 + line[8] + 1;
-          }
-          continue;
+      body {
+        font:
+          15px/1.5 system-ui,
+          -apple-system,
+          'Segoe UI',
+          Roboto,
+          sans-serif;
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: var(--surface);
+        padding: 14px 18px;
+        border-bottom: 1px solid var(--line);
+      }
+      header h1 {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 650;
+        letter-spacing: -0.01em;
+      }
+      header .sub {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      main {
+        padding: 18px;
+        max-width: 780px;
+        margin: auto;
+      }
+      section {
+        margin-bottom: 22px;
+      }
+      h2 {
+        font-size: 14px;
+        font-weight: 600;
+        margin: 0 0 10px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      h2 .n {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        width: 22px;
+        height: 22px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--r);
+        padding: 16px;
+      }
+      .card.lead {
+        background: var(--lead);
+        border-color: var(--ok-soft);
+      }
+      .card.warn {
+        background: var(--warn-bg);
+        border-color: var(--warn-line);
+        color: var(--warn-ink);
+        font-size: 13px;
+      }
+      .note {
+        color: var(--muted);
+        font-size: 12.5px;
+        line-height: 1.5;
+        margin: 8px 0 0;
+      }
+      .mono {
+        font:
+          12.5px ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+      }
+      .row.tight {
+        gap: 8px;
+      }
+      label.f {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        font-size: 12.5px;
+        color: var(--muted);
+      }
+      label.f input,
+      label.f select {
+        width: 100%;
+      }
+      input,
+      select {
+        font: inherit;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        color: var(--ink);
+        border-radius: 8px;
+        padding: 8px 9px;
+      }
+      input::placeholder {
+        color: var(--muted);
+      }
+      input:focus-visible,
+      select:focus-visible,
+      button:focus-visible,
+      summary:focus-visible {
+        outline: 2px solid var(--ok);
+        outline-offset: 2px;
+      }
+      button {
+        font: inherit;
+        background: var(--panel);
+        color: var(--ink);
+        border: 1px solid var(--line);
+        border-radius: var(--r);
+        padding: 7px 13px;
+        cursor: pointer;
+        transition:
+          background 0.15s,
+          border-color 0.15s;
+      }
+      button:hover:not(:disabled) {
+        background: var(--panel-hover);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      button.primary {
+        background: #1f6f3d;
+        border-color: #2ea043;
+        font-weight: 600;
+      }
+      button.primary:hover:not(:disabled) {
+        background: #238636;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+      @media (max-width: 560px) {
+        .grid {
+          grid-template-columns: 1fr;
         }
-        line.push(b);
-        if (line.length >= need) { s.improv.handle(new Uint8Array(line)); line = []; improv = false; }
       }
-    }
-  })().catch((e) => log("serial read: " + e.message, "bad"));
-  return pump;
-}
-
-async function detectImprov(s) {
-  // The device alternates a short serial window with the ESP-Touch window, so retry
-  // a few times before concluding it isn't speaking Improv.
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      await s.improv.rpc(RPC.STATE, [], { timeoutMs: 3000 });
-      const info = await s.improv.rpc(RPC.INFO, [], { timeoutMs: 3000 });
-      const el = $("device");
-      el.hidden = false;
-      el.textContent = (info[3] || "device") + " · " + (info[1] || "?") + " · " + (info[2] || "?");
-      log("Improv detected: " + info.join(" / "), "ok");
-      return true;
-    } catch { /* retry */ }
-  }
-  log("no Improv response — using the text CFG protocol", "bad");
-  return false;
-}
-
-async function sendTextCfg() {
-  textSaved = false;
-  const line = (v) => v && v.trim();
-  const cfg = ["ssid " + line($("ssid").value), "pass " + $("pass").value,
-               "host " + line($("host").value), "ip " + line($("ip").value),
-               "gw " + line($("gw").value), "dns " + line($("dns").value)]
-    .filter((l) => !l.endsWith(" ")).map((l) => "CFG " + l);
-  cfg.push("CFG commit");
-  const payload = enc.encode(cfg.join("\n") + "\n");
-  const deadline = Date.now() + 40000;
-  while (!textSaved && Date.now() < deadline) {
-    await session.writer.write(payload);
-    await new Promise((r) => setTimeout(r, 1500));
-  }
-  if (!textSaved) throw new Error("no CFGSAVED from the device");
-}
-
-async function configure() {
-  if (busy) return;
-  if (!$("ssid").value.trim()) { $("cfgstate").textContent = "enter a Wi-Fi name first"; return; }
-  busy = true; cfgBtn.disabled = true; scanBtn.disabled = true;
-  $("cfgstate").textContent = "talking to the device…";
-  $("result").style.display = "none";
-  try {
-    const s = await openSession();
-    const staticIp = $("ip").value.trim() || $("gw").value.trim() || $("dns").value.trim();
-    const useText = staticIp || !(await detectImprov(s));
-    if (useText) {
-      await sendTextCfg();
-      $("cfgstate").textContent = "config saved";
-    } else {
-      const ssid = $("ssid").value.trim(), pass = $("pass").value;
-      const sb = enc.encode(ssid), pb = enc.encode(pass);
-      const url = await s.improv.rpc(RPC.SET_WIFI, [sb.length, ...sb, pb.length, ...pb], { timeoutMs: 45000 });
-      const host = $("host").value.trim();
-      if (host && host !== "esp-adblock") {
-        const hb = enc.encode(host);
-        await s.improv.rpc(RPC.HOST, [...hb], { timeoutMs: 5000 }).catch(() => {});
+      #log {
+        background: #0a0e13;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px;
+        margin-top: 12px;
+        height: 180px;
+        overflow: auto;
+        font:
+          12px/1.45 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+        color: var(--muted);
+        white-space: pre-wrap;
+        word-break: break-word;
       }
-      if (url && url[0]) $("dashlink").dataset.ip = url[0].replace(/^https?:\/\//, "").replace(/\/$/, "");
-      $("cfgstate").textContent = "Wi-Fi configured";
-    }
-    const ip = $("dashlink").dataset.ip || "";
-    const host = ($("host").value.trim() || "esp-adblock").replace(/[^A-Za-z0-9._-]/g, "");
-    const target = ip && /^\d+\.\d+\.\d+\.\d+$/.test(ip) ? "http://" + ip + "/" : "http://" + host + ".local/";
-    $("dashlink").href = target;
-    $("dashlink").firstElementChild.textContent = target;
-    $("result").style.display = "block";
-    log("config applied" + (ip ? " — device at " + ip : ""), "ok");
-  } catch (e) {
-    $("cfgstate").textContent = "config failed";
-    log("config failed: " + (e && e.message ? e.message : e), "bad");
-  } finally {
-    await closeSession();
-    busy = false; cfgBtn.disabled = false; scanBtn.disabled = false;
-  }
-}
-
-async function scanNetworks() {
-  if (busy) return;
-  busy = true; scanBtn.disabled = true; cfgBtn.disabled = true;
-  $("cfgstate").textContent = "scanning…";
-  try {
-    const s = await openSession();
-    if (!(await detectImprov(s))) throw new Error("device did not answer Improv");
-    const nets = await s.improv.rpc(RPC.SCAN, [], { multi: true, timeoutMs: 20000 });
-    const list = $("ssidlist");
-    list.innerHTML = "";
-    const seen = new Set();
-    for (const [name, , secured] of nets.sort((a, b) => a[0].localeCompare(b[0]))) {
-      if (!name || seen.has(name)) continue;      // same SSID on several APs -> one entry
-      seen.add(name);
-      const o = document.createElement("option");
-      o.value = name;
-      o.label = name + " (" + (secured === "YES" ? "locked" : "open") + ")";
-      list.appendChild(o);
-    }
-    $("cfgstate").textContent = seen.size ? seen.size + " networks found" : "no networks found";
-    log("scan: " + seen.size + " networks", "ok");
-  } catch (e) {
-    $("cfgstate").textContent = "scan failed";
-    log("scan failed: " + (e && e.message ? e.message : e), "bad");
-  } finally {
-    await closeSession();
-    busy = false; scanBtn.disabled = false; cfgBtn.disabled = false;
-  }
-}
-
-// ---------- flashing ----------
-const esptoolTerminal = {
-  clean: () => log("— esptool —", "info"),     // esptool-js clears on connect; keep our own log
-  writeLine: (data) => { if (data && data.trim()) log(data.trim()); },
-  write: (data) => { if (data && data.trim()) log(data.trim()); },
-};
-
-function chipToBoard(desc) {
-  const s = String(desc || "").toUpperCase();
-  if (s.includes("ESP8266")) return "esp8266";
-  if (s.includes("ESP32-S3")) return "esp32s3";
-  if (s.includes("ESP32-C3")) return "c3";
-  // Anything else carrying a specific ESP32 family (S2/C6/H2/P4/…) has different
-  // flash offsets — refuse it instead of guessing, and never silently fall back.
-  if (/ESP32-[SCHP]/.test(s)) return null;
-  if (s.includes("ESP32")) return "esp32dev";
-  return null;
-}
-
-const UNSUPPORTED = /ESP32-[SCHP]/;
-
-async function loadManifest() {
-  try {
-    const r = await fetch("manifest.json", { cache: "no-store" });
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    manifest = await r.json();
-  } catch (e) {
-    $("manifest-warn").hidden = false;
-    $("fwver").value = "missing";
-    log("manifest.json: " + e.message, "bad");
-    return;
-  }
-  const select = $("board");
-  select.innerHTML = "";
-  for (const [id, b] of Object.entries(manifest.boards)) {
-    select.append(new Option(b.label + (b.partial ? " (no filesystem image)" : ""), id));
-  }
-  select.value = manifest.boards[manifest.default] ? manifest.default : Object.keys(manifest.boards)[0];
-  $("fwver").value = manifest.version || "dev";
-  installBtn.disabled = !(HAS_SERIAL || HAS_USB);
-  log("installer " + (manifest.version || "dev") + " ready — " + Object.keys(manifest.boards).length + " boards", "ok");
-}
-
-async function sha256Hex(buf) {
-  const d = await crypto.subtle.digest("SHA-256", buf);
-  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function fetchPart(part) {
-  log("fetch " + part.file + " (" + Math.round(part.size / 1024) + " KiB)…");
-  const r = await fetch(part.file, { cache: "no-store" });
-  if (!r.ok) throw new Error("fetch " + part.file + ": HTTP " + r.status);
-  const buf = await r.arrayBuffer();
-  if (part.sha256 && (await sha256Hex(buf)) !== part.sha256) throw new Error("checksum mismatch: " + part.file);
-  log("  sha256 ok", "ok");
-  return { data: new Uint8Array(buf), address: part.offset };
-}
-
-async function install() {
-  if (busy || !manifest) return;
-  busy = true; installBtn.disabled = true; cfgBtn.disabled = true; scanBtn.disabled = true;
-  $("result").style.display = "none";
-  setProgress(0);
-  const boardId = $("board").value;
-  const board = manifest.boards[boardId];
-  let transport = null;
-  try {
-    log("requesting serial port…", "info");
-    const p = await requestDevice();
-    const nativeUsb = boardId === "c3" || boardId === "esp32s3";
-    const baud = nativeUsb ? 115200 : 460800;
-    log("connecting at " + baud + "…", "info");
-    transport = new Transport(p, true);
-    const loader = new ESPLoader({ transport, baudrate: baud, romBaudrate: 115200, terminal: esptoolTerminal });
-    const chip = await loader.main();
-    const detected = chipToBoard(chip);
-    log("detected: " + chip, "ok");
-    if (UNSUPPORTED.test(String(chip).toUpperCase())) {
-      throw new Error("unsupported chip for this installer: " + chip + " (supports ESP8266 / ESP32 / C3 / S3 only)");
-    }
-    if (detected && detected !== boardId) {
-      throw new Error("board mismatch: detected " + detected + ", selected " + boardId + ". Pick the matching board and retry.");
-    }
-    if (!detected) log("warning: unknown chip, using selected board offsets", "bad");
-    $("support").textContent = chip;
-    $("support").className = "badge ok";
-
-    const images = [];
-    for (const part of board.parts) images.push(await fetchPart(part));
-
-    log("writing flash" + ($("erase").checked ? " (full erase + verify)" : " (verify)") + "…", "info");
-    await loader.writeFlash({
-      fileArray: images,
-      flashMode: "keep",
-      flashFreq: "keep",
-      flashSize: board.flashSize || "detect",
-      eraseAll: $("erase").checked,
-      compress: true,
-      calculateMD5Hash: md5hex,           // esptool-js verifies the bytes it wrote
-      // reportProgress byte counts are the *compressed* stream, so weight by file, not bytes.
-      reportProgress: (idx, written, total) =>
-        setProgress(((idx + (total ? written / total : 1)) / images.length) * 100),
-    });
-    setProgress(100);
-    log("flash verified — resetting", "ok");
-    await loader.after("hard_reset");
-    cfgBtn.disabled = false; scanBtn.disabled = false;
-    $("cfgstate").textContent = "ready — send your Wi-Fi config";
-    log("done. Keep the board plugged in and continue with step 2.", "ok");
-  } catch (e) {
-    setProgress(null);
-    $("support").className = "badge bad";
-    log("install failed: " + (e && e.message ? e.message : e), "bad");
-  } finally {
-    try { if (transport) await transport.disconnect(); } catch {}
-    transport = null;
-    busy = false;
-    installBtn.disabled = !(HAS_SERIAL || HAS_USB) || !manifest;
-    cfgBtn.disabled = false;      // never leave step 2 unreachable after a failure
-    scanBtn.disabled = false;
-  }
-}
-
-// ---------- boot ----------
-if (!HAS_SERIAL && !HAS_USB) {
-  $("unsupported").hidden = false;
-  $("support").textContent = "no serial support";
-  $("support").className = "badge bad";
-} else {
-  $("support").textContent = HAS_SERIAL ? "Web Serial ready" : "WebUSB ready";
-  $("support").className = "badge ok";
-  installBtn.disabled = false;
-  cfgBtn.disabled = false;
-  scanBtn.disabled = false;
-  if (HAS_SERIAL) {
-    navigator.serial.addEventListener("disconnect", (e) => {
-      if (e.port === port) {
-        port = null; session = null;
-        log("device unplugged", "bad");
-        $("support").textContent = "device disconnected";
-        $("support").className = "badge bad";
+      #log .ok {
+        color: var(--ok);
       }
-    });
-  }
-}
-$("install").addEventListener("click", install);
-$("configure").addEventListener("click", configure);
-$("scan").addEventListener("click", scanNetworks);
-loadManifest();
-</script>
-</body>
+      #log .bad {
+        color: var(--bad);
+      }
+      #log .info {
+        color: var(--ink);
+      }
+      .progress {
+        height: 8px;
+        background: var(--line);
+        border-radius: 99px;
+        overflow: hidden;
+        margin-top: 12px;
+        display: none;
+      }
+      .progress > i {
+        display: block;
+        height: 100%;
+        width: 0;
+        background: var(--ok);
+        transition: width 0.15s;
+      }
+      .badge {
+        font-size: 12px;
+        color: var(--muted);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 3px 10px;
+        white-space: nowrap;
+      }
+      .badge.ok {
+        color: var(--ok);
+        border-color: var(--ok-soft);
+      }
+      .badge.bad {
+        color: var(--bad);
+        border-color: var(--bad-soft);
+      }
+      summary {
+        cursor: pointer;
+        color: var(--muted);
+        font-size: 12.5px;
+        margin-top: 10px;
+      }
+      details[open] summary {
+        color: var(--ink);
+      }
+      a {
+        color: #58a6ff;
+      }
+      .result {
+        display: none;
+        margin-top: 12px;
+      }
+      .result b {
+        font-size: 18px;
+      }
+      .spacer {
+        flex: 1;
+      }
+      kbd {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 5px;
+        font-size: 11px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>ESP AdBlock</h1>
+      <span class="sub">Web Installer</span>
+      <span class="spacer"></span>
+      <span id="support" class="badge">checking…</span>
+    </header>
+
+    <main>
+      <div id="unsupported" class="card warn" hidden>
+        This browser has neither <b>Web Serial</b> nor <b>WebUSB</b>. Use Chrome, Edge or another Chromium browser on
+        desktop, served over HTTPS or localhost. (Firefox, Safari and mobile are not supported.)
+      </div>
+
+      <div id="manifest-warn" class="card warn" hidden>
+        <b>manifest.json not found.</b> Build the installers first:
+        <div class="mono" style="margin-top: 6px">python3 tools/build_installer.py</div>
+        then serve this folder (for example <span class="mono">python3 -m http.server -d installer 8000</span>).
+      </div>
+
+      <section>
+        <h2><span class="n">1</span> Install firmware</h2>
+        <div class="card">
+          <div class="grid">
+            <label class="f"
+              >Board
+              <select id="board"></select>
+            </label>
+            <label class="f"
+              >Firmware
+              <input id="fwver" value="loading…" readonly />
+            </label>
+          </div>
+          <div class="row" style="margin-top: 12px">
+            <label class="row tight" style="font-size: 12.5px; color: var(--muted)">
+              <input type="checkbox" id="erase" checked /> Erase flash before install (recommended)
+            </label>
+          </div>
+          <div class="row" style="margin-top: 14px">
+            <button id="install" class="primary" disabled>Connect &amp; install</button>
+            <span class="note" style="margin: 0"
+              >Hold <b>BOOT</b> and tap <b>RST</b> if the board is not detected.</span
+            >
+          </div>
+          <div
+            id="flashbar"
+            class="progress"
+            role="progressbar"
+            aria-label="Flash progress"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+          >
+            <i></i>
+          </div>
+          <div id="log" role="log" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <section>
+        <h2><span class="n">2</span> Configure Wi-Fi</h2>
+        <div class="card">
+          <p class="note" style="margin-top: 0">
+            After installing, the device listens on the USB port for its Wi-Fi config (<b>Improv Wi-Fi</b>, the same
+            protocol ESP Web Tools/Tasmota use). Keep it plugged in.
+          </p>
+          <div class="grid">
+            <label class="f"
+              >Wi-Fi name (SSID)
+              <input id="ssid" list="ssidlist" autocomplete="off" placeholder="MyNetwork" />
+              <datalist id="ssidlist"></datalist>
+            </label>
+            <label class="f"
+              >Password
+              <input id="pass" type="password" autocomplete="new-password" placeholder="••••••••" />
+            </label>
+            <label class="f"
+              >Hostname <span style="font-size: 11px">(applies after reboot)</span>
+              <input id="host" value="esp-adblock" autocomplete="off" />
+            </label>
+            <div class="f" style="justify-content: flex-end">
+              <button id="scan" disabled>Scan networks</button>
+            </div>
+          </div>
+          <details>
+            <summary>Advanced — static IP (uses the text fallback protocol)</summary>
+            <p class="note">
+              Filling any of these switches off Improv and sends the config as
+              <span class="mono">CFG <i>key</i> <i>value</i></span> lines instead. Leave empty to stay on Improv / DHCP.
+            </p>
+            <div class="grid">
+              <label class="f"
+                >Static IP
+                <input id="ip" placeholder="192.168.1.50" autocomplete="off" />
+              </label>
+              <label class="f"
+                >Gateway
+                <input id="gw" placeholder="192.168.1.1" autocomplete="off" />
+              </label>
+              <label class="f"
+                >Upstream DNS
+                <input id="dns" placeholder="9.9.9.9" autocomplete="off" />
+              </label>
+            </div>
+          </details>
+          <div class="row" style="margin-top: 14px">
+            <button id="configure" disabled>Send config over USB</button>
+            <span id="device" class="badge" hidden></span>
+            <span id="cfgstate" class="note" style="margin: 0"></span>
+          </div>
+          <div id="result" class="result">
+            <div class="note" style="margin: 0">Wi-Fi connected. Open the dashboard:</div>
+            <div>
+              <a id="dashlink" target="_blank" rel="noopener"><b></b></a>
+            </div>
+            <div class="note">
+              Default login is <span class="mono">admin</span> / <span class="mono">change-me-please</span> — change it
+              in the dashboard, or bake a real password with <span class="mono">config.env</span>.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2><span class="n">3</span> Prefer configs baked into the image?</h2>
+        <div class="card">
+          <p class="note" style="margin: 0">
+            The firmware reads <span class="mono">/wifi.cfg</span> (baked from <span class="mono">config.env</span>) and
+            <span class="mono">secrets.h</span> before falling back to runtime provisioning. To ship a pre-configured
+            image instead of using step 2, fill <span class="mono">config.env</span>, rebuild, then re-run
+            <span class="mono">tools/build_installer.py</span>:
+          </p>
+          <div class="mono" style="margin-top: 8px; line-height: 1.7">
+            cp config.env.example config.env &nbsp;# edit it<br />
+            pio run -e esp8266 &amp;&amp; pio run -t buildfs -e esp8266<br />
+            python3 tools/build_installer.py
+          </div>
+          <p class="note">
+            Use this only for a trusted build you control — the credentials end up inside the public
+            <span class="mono">.bin</span>.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <script type="module">
+      import { ESPLoader, Transport, WebUSBSerialPort } from './vendor/esptool-js.js'
+
+      const $ = (id) => document.getElementById(id)
+      const logEl = $('log')
+      const flashbar = $('flashbar')
+      const installBtn = $('install')
+      const cfgBtn = $('configure')
+      const scanBtn = $('scan')
+      const HAS_SERIAL = 'serial' in navigator
+      const HAS_USB = 'usb' in navigator
+      const enc = new TextEncoder()
+      const dec = new TextDecoder()
+
+      let manifest = null
+      let port = null
+      let busy = false
+      let session = null // { reader, writer, improv, detected }
+      let textSaved = false // set by the read loop when CFGSAVED arrives
+
+      function log(msg, cls) {
+        const line = document.createElement('div')
+        if (cls) line.className = cls
+        line.textContent = msg
+        logEl.appendChild(line)
+        logEl.scrollTop = logEl.scrollHeight
+      }
+
+      function setProgress(pct) {
+        flashbar.style.display = pct == null ? 'none' : 'block'
+        if (pct != null) {
+          const v = Math.max(0, Math.min(100, pct))
+          flashbar.firstElementChild.style.width = v + '%'
+          flashbar.setAttribute('aria-valuenow', String(Math.round(v)))
+        }
+      }
+
+      // ---------- MD5 (WebCrypto has no MD5; esptool-js wants one to verify the flash) ----------
+      function md5hex(bytes) {
+        const rl = (n, c) => (n << c) | (n >>> (32 - c))
+        const au = (x, y) => {
+          const l = (x & 0xffff) + (y & 0xffff)
+          return (((x >> 16) + (y >> 16) + (l >> 16)) << 16) | (l & 0xffff)
+        }
+        const cmn = (q, a, b, x, s, t) => au(rl(au(au(a, q), au(x, t)), s), b)
+        const ff = (a, b, c, d, x, s, t) => cmn((b & c) | (~b & d), a, b, x, s, t)
+        const gg = (a, b, c, d, x, s, t) => cmn((b & d) | (c & ~d), a, b, x, s, t)
+        const hh = (a, b, c, d, x, s, t) => cmn(b ^ c ^ d, a, b, x, s, t)
+        const ii = (a, b, c, d, x, s, t) => cmn(c ^ (b | ~d), a, b, x, s, t)
+        let str = ''
+        for (let i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i])
+        const x = []
+        for (let i = 0; i < str.length * 8; i += 8)
+          x[i >> 5] = (x[i >> 5] || 0) | ((str.charCodeAt(i / 8) & 0xff) << i % 32)
+        const len = str.length * 8
+        x[len >> 5] = (x[len >> 5] || 0) | (0x80 << len % 32)
+        x[(((len + 64) >>> 9) << 4) + 14] = len
+        let a = 1732584193,
+          b = -271733879,
+          c = -1732584194,
+          d = 271733878
+        for (let i = 0; i < x.length; i += 16) {
+          const oa = a,
+            ob = b,
+            oc = c,
+            od = d
+          a = ff(a, b, c, d, x[i] | 0, 7, -680876936)
+          d = ff(d, a, b, c, x[i + 1] | 0, 12, -389564586)
+          c = ff(c, d, a, b, x[i + 2] | 0, 17, 606105819)
+          b = ff(b, c, d, a, x[i + 3] | 0, 22, -1044525330)
+          a = ff(a, b, c, d, x[i + 4] | 0, 7, -176418897)
+          d = ff(d, a, b, c, x[i + 5] | 0, 12, 1200080426)
+          c = ff(c, d, a, b, x[i + 6] | 0, 17, -1473231341)
+          b = ff(b, c, d, a, x[i + 7] | 0, 22, -45705983)
+          a = ff(a, b, c, d, x[i + 8] | 0, 7, 1770035416)
+          d = ff(d, a, b, c, x[i + 9] | 0, 12, -1958414417)
+          c = ff(c, d, a, b, x[i + 10] | 0, 17, -42063)
+          b = ff(b, c, d, a, x[i + 11] | 0, 22, -1990404162)
+          a = ff(a, b, c, d, x[i + 12] | 0, 7, 1804603682)
+          d = ff(d, a, b, c, x[i + 13] | 0, 12, -40341101)
+          c = ff(c, d, a, b, x[i + 14] | 0, 17, -1502002290)
+          b = ff(b, c, d, a, x[i + 15] | 0, 22, 1236535329)
+          a = gg(a, b, c, d, x[i + 1] | 0, 5, -165796510)
+          d = gg(d, a, b, c, x[i + 6] | 0, 9, -1069501632)
+          c = gg(c, d, a, b, x[i + 11] | 0, 14, 643717713)
+          b = gg(b, c, d, a, x[i] | 0, 20, -373897302)
+          a = gg(a, b, c, d, x[i + 5] | 0, 5, -701558691)
+          d = gg(d, a, b, c, x[i + 10] | 0, 9, 38016083)
+          c = gg(c, d, a, b, x[i + 15] | 0, 14, -660478335)
+          b = gg(b, c, d, a, x[i + 4] | 0, 20, -405537848)
+          a = gg(a, b, c, d, x[i + 9] | 0, 5, 568446438)
+          d = gg(d, a, b, c, x[i + 14] | 0, 9, -1019803690)
+          c = gg(c, d, a, b, x[i + 3] | 0, 14, -187363961)
+          b = gg(b, c, d, a, x[i + 8] | 0, 20, 1163531501)
+          a = gg(a, b, c, d, x[i + 13] | 0, 5, -1444681467)
+          d = gg(d, a, b, c, x[i + 2] | 0, 9, -51403784)
+          c = gg(c, d, a, b, x[i + 7] | 0, 14, 1735328473)
+          b = gg(b, c, d, a, x[i + 12] | 0, 20, -1926607734)
+          a = hh(a, b, c, d, x[i + 5] | 0, 4, -378558)
+          d = hh(d, a, b, c, x[i + 8] | 0, 11, -2022574463)
+          c = hh(c, d, a, b, x[i + 11] | 0, 16, 1839030562)
+          b = hh(b, c, d, a, x[i + 14] | 0, 23, -35309556)
+          a = hh(a, b, c, d, x[i + 1] | 0, 4, -1530992060)
+          d = hh(d, a, b, c, x[i + 4] | 0, 11, 1272893353)
+          c = hh(c, d, a, b, x[i + 7] | 0, 16, -155497632)
+          b = hh(b, c, d, a, x[i + 10] | 0, 23, -1094730640)
+          a = hh(a, b, c, d, x[i + 13] | 0, 4, 681279174)
+          d = hh(d, a, b, c, x[i] | 0, 11, -358537222)
+          c = hh(c, d, a, b, x[i + 3] | 0, 16, -722521979)
+          b = hh(b, c, d, a, x[i + 6] | 0, 23, 76029189)
+          a = hh(a, b, c, d, x[i + 9] | 0, 4, -640364487)
+          d = hh(d, a, b, c, x[i + 12] | 0, 11, -421815835)
+          c = hh(c, d, a, b, x[i + 15] | 0, 16, 530742520)
+          b = hh(b, c, d, a, x[i + 2] | 0, 23, -995338651)
+          a = ii(a, b, c, d, x[i] | 0, 6, -198630844)
+          d = ii(d, a, b, c, x[i + 7] | 0, 10, 1126891415)
+          c = ii(c, d, a, b, x[i + 14] | 0, 15, -1416354905)
+          b = ii(b, c, d, a, x[i + 5] | 0, 21, -57434055)
+          a = ii(a, b, c, d, x[i + 12] | 0, 6, 1700485571)
+          d = ii(d, a, b, c, x[i + 3] | 0, 10, -1894986606)
+          c = ii(c, d, a, b, x[i + 10] | 0, 15, -1051523)
+          b = ii(b, c, d, a, x[i + 1] | 0, 21, -2054922799)
+          a = ii(a, b, c, d, x[i + 8] | 0, 6, 1873313359)
+          d = ii(d, a, b, c, x[i + 15] | 0, 10, -30611744)
+          c = ii(c, d, a, b, x[i + 6] | 0, 15, -1560198380)
+          b = ii(b, c, d, a, x[i + 13] | 0, 21, 1309151649)
+          a = ii(a, b, c, d, x[i + 4] | 0, 6, -145523070)
+          d = ii(d, a, b, c, x[i + 11] | 0, 10, -1120210379)
+          c = ii(c, d, a, b, x[i + 2] | 0, 15, 718787259)
+          b = ii(b, c, d, a, x[i + 9] | 0, 21, -343485551)
+          a = au(a, oa)
+          b = au(b, ob)
+          c = au(c, oc)
+          d = au(d, od)
+        }
+        const hex = (n) => {
+          let s = ''
+          for (let j = 0; j < 4; j++) s += ('0' + ((n >> (j * 8)) & 0xff).toString(16)).slice(-2)
+          return s
+        }
+        return hex(a) + hex(b) + hex(c) + hex(d)
+      }
+
+      // ---------- Improv Wi-Fi Serial client (https://www.improv-wifi.com/serial/) ----------
+      const RPC = { SET_WIFI: 0x01, STATE: 0x02, INFO: 0x03, SCAN: 0x04, HOST: 0x05 }
+      const STATE = { STOPPED: 0x00, READY: 0x02, PROVISIONING: 0x03, PROVISIONED: 0x04 }
+      const ERROR = {
+        0x00: 'no error',
+        0x01: 'invalid packet',
+        0x02: 'unknown command',
+        0x03: 'unable to connect',
+        0x05: 'bad hostname',
+        0xff: 'unknown error',
+      }
+
+      class Improv {
+        constructor(send) {
+          this.send = send
+          this.state = null
+          this.error = 0
+          this._p = null // { cmd, multi, items, resolve, reject }
+        }
+        _packet(type, data) {
+          const p = new Uint8Array(9 + data.length + 2)
+          p.set(enc.encode('IMPROV'), 0)
+          p[6] = 1
+          p[7] = type
+          p[8] = data.length
+          p.set(data, 9)
+          let cs = 0
+          for (let i = 0; i < 9 + data.length; i++) cs += p[i]
+          p[9 + data.length] = cs & 0xff
+          p[10 + data.length] = 10
+          return p
+        }
+        rpc(cmd, data = [], { multi = false, timeoutMs = 6000 } = {}) {
+          const payload = [cmd, data.length, ...data]
+          return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+              this._p = null
+              reject(new Error('Improv timeout'))
+            }, timeoutMs)
+            this._p = {
+              cmd,
+              multi,
+              items: [],
+              resolve: (v) => {
+                clearTimeout(timer)
+                this._p = null
+                resolve(v)
+              },
+              reject: (e) => {
+                clearTimeout(timer)
+                this._p = null
+                reject(e)
+              },
+            }
+            this.send(this._packet(0x03, payload))
+          })
+        }
+        handle(pkt) {
+          if (pkt[6] !== 1) return
+          const type = pkt[7],
+            len = pkt[8]
+          let cs = 0
+          for (let i = 0; i < 9 + len; i++) cs += pkt[i]
+          if ((cs & 0xff) !== pkt[9 + len]) return // bad checksum: ignore
+          const data = Array.from(pkt.slice(9, 9 + len))
+          if (type === 0x01) {
+            this.state = data[0]
+            // REQUEST_CURRENT_STATE only gets an RPC result when provisioned; resolve otherwise.
+            if (this._p && this._p.cmd === RPC.STATE) {
+              const p = this._p
+              setTimeout(() => {
+                if (this._p === p) p.resolve([''])
+              }, 400)
+            }
+          } else if (type === 0x02) {
+            this.error = data[0]
+            if (this._p) this._p.reject(new Error('device: ' + (ERROR[data[0]] || 'error ' + data[0])))
+          } else if (type === 0x04) {
+            if (!this._p || this._p.cmd !== data[0]) return
+            const strings = []
+            let i = 2
+            const total = data[1]
+            while (i < 2 + total) {
+              strings.push(dec.decode(new Uint8Array(data.slice(i + 1, i + 1 + data[i]))))
+              i += data[i] + 1
+            }
+            if (this._p.multi) {
+              if (strings.length) this._p.items.push(strings)
+              else this._p.resolve(this._p.items) // empty list = end of stream
+            } else {
+              this._p.resolve(strings)
+            }
+          }
+        }
+      }
+
+      // ---------- serial session (shared read loop for Improv + text CFG) ----------
+      async function requestDevice() {
+        if (port) return port
+        if (HAS_SERIAL) {
+          const granted = await navigator.serial.getPorts()
+          if (granted.length === 1) {
+            log('reusing previously granted serial port', 'info')
+            port = granted[0]
+            return port
+          }
+          port = await navigator.serial.requestPort()
+          return port
+        }
+        const wusb = await WebUSBSerialPort.requestPort() // CH340/CH341 via WebUSB
+        port = wusb.asSerialPort()
+        return port
+      }
+
+      async function openSession() {
+        if (session) return session
+        const p = await requestDevice()
+        if (p.readable || p.writable) throw new Error('serial port busy — unplug/replug the board and retry')
+        await p.open({ baudRate: 115200 })
+        const writer = p.writable.getWriter()
+        const reader = p.readable.getReader()
+        const s = { writer, reader, improv: null }
+        s.improv = new Improv((u8) => writer.write(u8))
+        session = s
+        readLoop(s)
+        return s
+      }
+
+      async function closeSession() {
+        const s = session
+        session = null
+        if (!s) return
+        try {
+          await s.reader.cancel()
+        } catch {}
+        try {
+          s.reader.releaseLock()
+        } catch {}
+        try {
+          s.writer.releaseLock()
+        } catch {}
+        try {
+          await port.close()
+        } catch {}
+      }
+
+      // Byte pump: Improv packets are framed ("IMPROV" + ver + type + len + data + checksum);
+      // anything else is a text line from the firmware log / CFG protocol.
+      function readLoop(s) {
+        let line = []
+        let improv = false,
+          need = 0
+        const pump = (async () => {
+          while (session === s) {
+            const { value, done } = await s.reader.read()
+            if (done) break
+            for (const b of value) {
+              if (!improv) {
+                if (b === 10) {
+                  const t = dec.decode(new Uint8Array(line)).replace(/\r/g, '').trim()
+                  line = []
+                  if (!t) continue
+                  log(t)
+                  if (t.includes('CFGSAVED')) textSaved = true
+                  const m = t.match(/WiFi up:\s*(\d+\.\d+\.\d+\.\d+)/)
+                  if (m) $('dashlink').dataset.ip = m[1]
+                  continue
+                }
+                line.push(b)
+                if (line.length > 512) line = []
+                if (line.length === 9 && dec.decode(new Uint8Array(line.slice(0, 6))) === 'IMPROV') {
+                  improv = true
+                  need = 9 + line[8] + 1
+                }
+                continue
+              }
+              line.push(b)
+              if (line.length >= need) {
+                s.improv.handle(new Uint8Array(line))
+                line = []
+                improv = false
+              }
+            }
+          }
+        })().catch((e) => log('serial read: ' + e.message, 'bad'))
+        return pump
+      }
+
+      async function detectImprov(s) {
+        // The device alternates a short serial window with the ESP-Touch window, so retry
+        // a few times before concluding it isn't speaking Improv.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            await s.improv.rpc(RPC.STATE, [], { timeoutMs: 3000 })
+            const info = await s.improv.rpc(RPC.INFO, [], { timeoutMs: 3000 })
+            const el = $('device')
+            el.hidden = false
+            el.textContent = (info[3] || 'device') + ' · ' + (info[1] || '?') + ' · ' + (info[2] || '?')
+            log('Improv detected: ' + info.join(' / '), 'ok')
+            return true
+          } catch {
+            /* retry */
+          }
+        }
+        log('no Improv response — using the text CFG protocol', 'bad')
+        return false
+      }
+
+      async function sendTextCfg() {
+        textSaved = false
+        const line = (v) => v && v.trim()
+        const cfg = [
+          'ssid ' + line($('ssid').value),
+          'pass ' + $('pass').value,
+          'host ' + line($('host').value),
+          'ip ' + line($('ip').value),
+          'gw ' + line($('gw').value),
+          'dns ' + line($('dns').value),
+        ]
+          .filter((l) => !l.endsWith(' '))
+          .map((l) => 'CFG ' + l)
+        cfg.push('CFG commit')
+        const payload = enc.encode(cfg.join('\n') + '\n')
+        const deadline = Date.now() + 40000
+        while (!textSaved && Date.now() < deadline) {
+          await session.writer.write(payload)
+          await new Promise((r) => setTimeout(r, 1500))
+        }
+        if (!textSaved) throw new Error('no CFGSAVED from the device')
+      }
+
+      async function configure() {
+        if (busy) return
+        if (!$('ssid').value.trim()) {
+          $('cfgstate').textContent = 'enter a Wi-Fi name first'
+          return
+        }
+        busy = true
+        cfgBtn.disabled = true
+        scanBtn.disabled = true
+        $('cfgstate').textContent = 'talking to the device…'
+        $('result').style.display = 'none'
+        try {
+          const s = await openSession()
+          const staticIp = $('ip').value.trim() || $('gw').value.trim() || $('dns').value.trim()
+          const useText = staticIp || !(await detectImprov(s))
+          if (useText) {
+            await sendTextCfg()
+            $('cfgstate').textContent = 'config saved'
+          } else {
+            const ssid = $('ssid').value.trim(),
+              pass = $('pass').value
+            const sb = enc.encode(ssid),
+              pb = enc.encode(pass)
+            const url = await s.improv.rpc(RPC.SET_WIFI, [sb.length, ...sb, pb.length, ...pb], { timeoutMs: 45000 })
+            const host = $('host').value.trim()
+            if (host && host !== 'esp-adblock') {
+              const hb = enc.encode(host)
+              await s.improv.rpc(RPC.HOST, [...hb], { timeoutMs: 5000 }).catch(() => {})
+            }
+            if (url && url[0]) $('dashlink').dataset.ip = url[0].replace(/^https?:\/\//, '').replace(/\/$/, '')
+            $('cfgstate').textContent = 'Wi-Fi configured'
+          }
+          const ip = $('dashlink').dataset.ip || ''
+          const host = ($('host').value.trim() || 'esp-adblock').replace(/[^A-Za-z0-9._-]/g, '')
+          const target = ip && /^\d+\.\d+\.\d+\.\d+$/.test(ip) ? 'http://' + ip + '/' : 'http://' + host + '.local/'
+          $('dashlink').href = target
+          $('dashlink').firstElementChild.textContent = target
+          $('result').style.display = 'block'
+          log('config applied' + (ip ? ' — device at ' + ip : ''), 'ok')
+        } catch (e) {
+          $('cfgstate').textContent = 'config failed'
+          log('config failed: ' + (e && e.message ? e.message : e), 'bad')
+        } finally {
+          await closeSession()
+          busy = false
+          cfgBtn.disabled = false
+          scanBtn.disabled = false
+        }
+      }
+
+      async function scanNetworks() {
+        if (busy) return
+        busy = true
+        scanBtn.disabled = true
+        cfgBtn.disabled = true
+        $('cfgstate').textContent = 'scanning…'
+        try {
+          const s = await openSession()
+          if (!(await detectImprov(s))) throw new Error('device did not answer Improv')
+          const nets = await s.improv.rpc(RPC.SCAN, [], { multi: true, timeoutMs: 20000 })
+          const list = $('ssidlist')
+          list.innerHTML = ''
+          const seen = new Set()
+          for (const [name, , secured] of nets.sort((a, b) => a[0].localeCompare(b[0]))) {
+            if (!name || seen.has(name)) continue // same SSID on several APs -> one entry
+            seen.add(name)
+            const o = document.createElement('option')
+            o.value = name
+            o.label = name + ' (' + (secured === 'YES' ? 'locked' : 'open') + ')'
+            list.appendChild(o)
+          }
+          $('cfgstate').textContent = seen.size ? seen.size + ' networks found' : 'no networks found'
+          log('scan: ' + seen.size + ' networks', 'ok')
+        } catch (e) {
+          $('cfgstate').textContent = 'scan failed'
+          log('scan failed: ' + (e && e.message ? e.message : e), 'bad')
+        } finally {
+          await closeSession()
+          busy = false
+          scanBtn.disabled = false
+          cfgBtn.disabled = false
+        }
+      }
+
+      // ---------- flashing ----------
+      const esptoolTerminal = {
+        clean: () => log('— esptool —', 'info'), // esptool-js clears on connect; keep our own log
+        writeLine: (data) => {
+          if (data && data.trim()) log(data.trim())
+        },
+        write: (data) => {
+          if (data && data.trim()) log(data.trim())
+        },
+      }
+
+      function chipToBoard(desc) {
+        const s = String(desc || '').toUpperCase()
+        if (s.includes('ESP8266')) return 'esp8266'
+        if (s.includes('ESP32-S3')) return 'esp32s3'
+        if (s.includes('ESP32-C3')) return 'c3'
+        // Anything else carrying a specific ESP32 family (S2/C6/H2/P4/…) has different
+        // flash offsets — refuse it instead of guessing, and never silently fall back.
+        if (/ESP32-[SCHP]/.test(s)) return null
+        if (s.includes('ESP32')) return 'esp32dev'
+        return null
+      }
+
+      const UNSUPPORTED = /ESP32-[SCHP]/
+
+      async function loadManifest() {
+        try {
+          const r = await fetch('manifest.json', { cache: 'no-store' })
+          if (!r.ok) throw new Error('HTTP ' + r.status)
+          manifest = await r.json()
+        } catch (e) {
+          $('manifest-warn').hidden = false
+          $('fwver').value = 'missing'
+          log('manifest.json: ' + e.message, 'bad')
+          return
+        }
+        const select = $('board')
+        select.innerHTML = ''
+        for (const [id, b] of Object.entries(manifest.boards)) {
+          select.append(new Option(b.label + (b.partial ? ' (no filesystem image)' : ''), id))
+        }
+        select.value = manifest.boards[manifest.default] ? manifest.default : Object.keys(manifest.boards)[0]
+        $('fwver').value = manifest.version || 'dev'
+        installBtn.disabled = !(HAS_SERIAL || HAS_USB)
+        log(
+          'installer ' + (manifest.version || 'dev') + ' ready — ' + Object.keys(manifest.boards).length + ' boards',
+          'ok',
+        )
+      }
+
+      async function sha256Hex(buf) {
+        const d = await crypto.subtle.digest('SHA-256', buf)
+        return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('')
+      }
+
+      async function fetchPart(part) {
+        log('fetch ' + part.file + ' (' + Math.round(part.size / 1024) + ' KiB)…')
+        const r = await fetch(part.file, { cache: 'no-store' })
+        if (!r.ok) throw new Error('fetch ' + part.file + ': HTTP ' + r.status)
+        const buf = await r.arrayBuffer()
+        if (part.sha256 && (await sha256Hex(buf)) !== part.sha256) throw new Error('checksum mismatch: ' + part.file)
+        log('  sha256 ok', 'ok')
+        return { data: new Uint8Array(buf), address: part.offset }
+      }
+
+      async function install() {
+        if (busy || !manifest) return
+        busy = true
+        installBtn.disabled = true
+        cfgBtn.disabled = true
+        scanBtn.disabled = true
+        $('result').style.display = 'none'
+        setProgress(0)
+        const boardId = $('board').value
+        const board = manifest.boards[boardId]
+        let transport = null
+        try {
+          log('requesting serial port…', 'info')
+          const p = await requestDevice()
+          const nativeUsb = boardId === 'c3' || boardId === 'esp32s3'
+          const baud = nativeUsb ? 115200 : 460800
+          log('connecting at ' + baud + '…', 'info')
+          transport = new Transport(p, true)
+          const loader = new ESPLoader({ transport, baudrate: baud, romBaudrate: 115200, terminal: esptoolTerminal })
+          const chip = await loader.main()
+          const detected = chipToBoard(chip)
+          log('detected: ' + chip, 'ok')
+          if (UNSUPPORTED.test(String(chip).toUpperCase())) {
+            throw new Error(
+              'unsupported chip for this installer: ' + chip + ' (supports ESP8266 / ESP32 / C3 / S3 only)',
+            )
+          }
+          if (detected && detected !== boardId) {
+            throw new Error(
+              'board mismatch: detected ' + detected + ', selected ' + boardId + '. Pick the matching board and retry.',
+            )
+          }
+          if (!detected) log('warning: unknown chip, using selected board offsets', 'bad')
+          $('support').textContent = chip
+          $('support').className = 'badge ok'
+
+          const images = []
+          for (const part of board.parts) images.push(await fetchPart(part))
+
+          log('writing flash' + ($('erase').checked ? ' (full erase + verify)' : ' (verify)') + '…', 'info')
+          await loader.writeFlash({
+            fileArray: images,
+            flashMode: 'keep',
+            flashFreq: 'keep',
+            flashSize: board.flashSize || 'detect',
+            eraseAll: $('erase').checked,
+            compress: true,
+            calculateMD5Hash: md5hex, // esptool-js verifies the bytes it wrote
+            // reportProgress byte counts are the *compressed* stream, so weight by file, not bytes.
+            reportProgress: (idx, written, total) =>
+              setProgress(((idx + (total ? written / total : 1)) / images.length) * 100),
+          })
+          setProgress(100)
+          log('flash verified — resetting', 'ok')
+          await loader.after('hard_reset')
+          cfgBtn.disabled = false
+          scanBtn.disabled = false
+          $('cfgstate').textContent = 'ready — send your Wi-Fi config'
+          log('done. Keep the board plugged in and continue with step 2.', 'ok')
+        } catch (e) {
+          setProgress(null)
+          $('support').className = 'badge bad'
+          log('install failed: ' + (e && e.message ? e.message : e), 'bad')
+        } finally {
+          try {
+            if (transport) await transport.disconnect()
+          } catch {}
+          transport = null
+          busy = false
+          installBtn.disabled = !(HAS_SERIAL || HAS_USB) || !manifest
+          cfgBtn.disabled = false // never leave step 2 unreachable after a failure
+          scanBtn.disabled = false
+        }
+      }
+
+      // ---------- boot ----------
+      if (!HAS_SERIAL && !HAS_USB) {
+        $('unsupported').hidden = false
+        $('support').textContent = 'no serial support'
+        $('support').className = 'badge bad'
+      } else {
+        $('support').textContent = HAS_SERIAL ? 'Web Serial ready' : 'WebUSB ready'
+        $('support').className = 'badge ok'
+        installBtn.disabled = false
+        cfgBtn.disabled = false
+        scanBtn.disabled = false
+        if (HAS_SERIAL) {
+          navigator.serial.addEventListener('disconnect', (e) => {
+            if (e.port === port) {
+              port = null
+              session = null
+              log('device unplugged', 'bad')
+              $('support').textContent = 'device disconnected'
+              $('support').className = 'badge bad'
+            }
+          })
+        }
+      }
+      $('install').addEventListener('click', install)
+      $('configure').addEventListener('click', configure)
+      $('scan').addEventListener('click', scanNetworks)
+      loadManifest()
+    </script>
+  </body>
 </html>
