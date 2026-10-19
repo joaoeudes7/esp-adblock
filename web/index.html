@@ -9,6 +9,7 @@
 }
 *{box-sizing:border-box}
 [hidden]{display:none!important}
+[x-cloak]{display:none!important}
 body{font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;margin:0;background:var(--bg);color:var(--ink)}
 /* decorative background: tiled SVG pattern (no-ads sign + footprints), behind the content */
 .bgpat{position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;opacity:.14}
@@ -31,11 +32,14 @@ h3{font-size:13px;font-weight:600;color:var(--muted);margin:20px 0 8px}
 .note{color:var(--muted);font-size:12.5px;line-height:1.5}
 .note.ok{color:var(--ok)}.note.bad{color:var(--bad)}
 .host{display:flex;align-items:center;gap:7px}
+.fav{width:16px;height:16px;border-radius:3px;object-fit:contain;flex:none;background:var(--line)}
+.av{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;font-size:9.5px;font-weight:700;color:#fff;text-transform:uppercase;flex:none;line-height:1}
+.av0{background:#EA4335}.av1{background:#000}.av2{background:#0866FF}.av3{background:#FF9900}.av4{background:#7FBA00}.avn{background:#30363d}
 .mono{font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink)}
 .nm{background:transparent;border:1px solid transparent;color:var(--ink);border-radius:6px;padding:2px 4px;min-width:70px;width:100%}
 .nm:hover{border-color:var(--line)}
 .nm:focus{border-color:var(--ok);background:var(--bg)}
-.warn{display:none;background:var(--warn-bg);border:1px solid var(--warn-line);color:var(--warn-ink);border-radius:var(--r);padding:12px 14px;margin-bottom:22px;font-size:13px}
+.warn{background:var(--warn-bg);border:1px solid var(--warn-line);color:var(--warn-ink);border-radius:var(--r);padding:12px 14px;margin-bottom:22px;font-size:13px}
 .warn.info{background:var(--panel);border-color:var(--line);color:var(--ink);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .warn.info[hidden]{display:none!important}
 .status{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
@@ -46,9 +50,29 @@ h3{font-size:13px;font-weight:600;color:var(--muted);margin:20px 0 8px}
 .kpi-n{font-size:24px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
 .kpi-l{color:var(--muted);font-size:12.5px}
 .a{color:var(--ok)}
-.ratio{display:flex;height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin-top:14px}
-.ratio .seg{background:var(--ok);transition:width .5s cubic-bezier(.2,.7,.2,1)}
+.mbar{display:flex;flex-direction:column;gap:7px;margin-top:14px}
+.mrow{display:flex;align-items:center;gap:9px}
+.mrow .m{flex:1;height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+.mrow .m>span{display:block;height:100%;transition:width .5s cubic-bezier(.2,.7,.2,1)}
+.mrow .ml{flex:0 0 auto;width:132px;color:var(--muted);font-size:11.5px}
+.mrow .mv{flex:0 0 auto;width:38px;text-align:right;color:var(--ink);font-size:11.5px;font-variant-numeric:tabular-nums}
+.c-ok>span{background:var(--ok)}.c-hdr>span{background:var(--accent)}.c-all>span{background:var(--warn)}
+.gbar{display:flex;height:8px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:12px}
+.gbar span{display:block;height:100%}
+.gbar .s0{background:#EA4335} /* Google blue */.gbar .s1{background:#000} /* Apple gray */.gbar .s2{background:#0866FF} /* Meta blue */.gbar .s3{background:#FF9900} /* Amazon orange */.gbar .s4{background:#7FBA00} /* Microsoft blue */.gbar .s5{background:#30363d} /* other */
 .ratio-cap{color:var(--muted);font-size:11.5px;margin-top:5px;font-variant-numeric:tabular-nums}
+.geo{display:grid;grid-template-columns:minmax(0,1fr) 215px;gap:16px;align-items:start}
+.geomap svg{display:block;width:100%;height:auto}
+.geomap path{fill:transparent;stroke:var(--line);stroke-width:.6}
+.geomap path[data-n="1"]{fill:rgba(63,185,80,.16)}
+.geomap path[data-n="2"]{fill:rgba(63,185,80,.36)}
+.geomap path[data-n="3"]{fill:rgba(63,185,80,.62)}
+.geolist{list-style:none;margin:0;padding:0}
+.geolist li{display:flex;align-items:baseline;gap:7px;padding:5px 0;border-bottom:1px solid var(--line);font-size:13px}
+.geolist li:last-child{border-bottom:0}
+.geolist .gc{font:11.5px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);flex:none}
+.geolist .gn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.geolist .gv{color:var(--muted);font-variant-numeric:tabular-nums;font-size:12px;flex:none}
 .devline{color:var(--muted);font-size:12.5px;margin-top:10px}
 table{width:100%;border-collapse:collapse;margin:0}
 th,td{padding:9px 10px;text-align:left;border-bottom:1px solid var(--line);font-size:13.5px}
@@ -87,6 +111,7 @@ details.sec h3{margin:14px 0 8px}
 .danger h3:first-of-type{margin-top:14px}
 .iconbtn{background:none;border:0;color:var(--muted);padding:6px;border-radius:8px;display:inline-flex;cursor:pointer}
 .iconbtn:hover{background:var(--panel-hover);color:var(--ink)}
+.iconbtn[aria-pressed=true]{color:var(--ok)}
 .field{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:13px}
 .twrap{overflow-x:auto;-webkit-overflow-scrolling:touch;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow-1,0 1px 2px #0005)}
 .twrap:focus-visible{outline:2px solid var(--ok);outline-offset:2px}
@@ -119,156 +144,224 @@ h2 svg.lucide,details.adv>summary svg.lucide{width:17px;height:17px}
 .status .dot svg.lucide{width:20px;height:20px;vertical-align:-4px}
 tr.new td{animation:fade 1.6s ease-out}
 @keyframes fade{from{background:var(--flash)}to{background:transparent}}
-@media(max-width:640px){main{padding:12px}h1{font-size:15px}th,td{padding:7px 8px}.kpis{gap:18px}.kpi-n{font-size:21px}button,input,select{min-height:44px}}
+@media(max-width:640px){main{padding:12px}h1{font-size:15px}th,td{padding:7px 8px}.kpis{gap:18px}.kpi-n{font-size:21px}button,input,select{min-height:44px}.geo{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
-</style></head><body>
+</style></head><body x-data="dashboard" @keydown.escape.window="adv && closeAdv()">
 <svg class="bgpat" aria-hidden="true"><defs><pattern id="bgp" width="160" height="160" patternUnits="userSpaceOnUse"><g fill="none" stroke="#3d4450" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(18 16) scale(1.5)"><circle cx="12" cy="12" r="10"/><path d="M4.929 4.929 19.07 19.071"/></g><text x="36" y="38" font-family="sans-serif" font-size="10" font-weight="700" fill="#3d4450" stroke="none" text-anchor="middle">ADS</text><g transform="translate(96 90) scale(1.6)"><path d="M4 16v-2.38C4 11.5 2.97 10.5 3 8c.03-2.72 1.49-6 4.5-6C9.37 2 10 3.8 10 5.5c0 3.11-2 5.66-2 8.68V16a2 2 0 1 1-4 0Z"/><path d="M20 20v-2.38c0-2.12 1.03-3.12 1-5.62-.03-2.72-1.49-6-4.5-6C14.63 6 14 7.8 14 9.5c0 3.11 2 5.66 2 8.68V20a2 2 0 1 0 4 0Z"/><path d="M16 17h4"/><path d="M4 13h4"/></g></g></pattern></defs><rect width="100%" height="100%" fill="url(#bgp)"/></svg>
 <div id=loadbar class=on></div>
 <header>
   <h1><i data-lucide="shield-check" aria-hidden=true></i> ESP ADBlock</h1>
-  <span class=sub id=host></span>
+  <span class=sub id=host x-text="s ? '@ '+s.ip : ''"></span>
   <span class=spacer></span>
-  <span class="badge" id=ver></span>
-  <span id=conn class="badge">connecting…</span>
-  <button class=iconbtn onclick="load()" aria-label="Refresh" title="Refresh"><i data-lucide="refresh-cw" aria-hidden=true></i></button>
+  <span class="badge" id=ver x-text="s && s.ver ? 'v'+s.ver : ''"></span>
+  <span id=conn class=badge :class="'badge '+connCls" x-text="connText">connecting…</span>
+  <button class=iconbtn @click="load()" aria-label="Refresh" title="Refresh now"><i data-lucide="refresh-cw" aria-hidden=true></i></button>
 </header>
 <main>
 <div id=boot class=boot role=status aria-live=polite><span class=spinner></span>Loading…</div>
-  <div id=credwarn class=warn role=alert>
+  <div id=credwarn class=warn role=alert x-show="s && s.defcreds" x-cloak>
     <i data-lucide="triangle-alert" aria-hidden=true></i> The panel password is still the default. Change <code>WEB_PASS</code> in <code>config.env</code> and reflash.
   </div>
-  <div id=updnudge class="warn info" hidden role=status>
+  <div id=updnudge class="warn info" x-show="s && !s.upat && blUrlSaved && !updDismissed" x-cloak role=status>
     <i data-lucide="download" aria-hidden=true></i> Blocklist not updated since the last reboot.
-    <button class=btnico onclick="fetchUpload(event)"><i data-lucide="download" aria-hidden=true></i>Update now</button>
-    <button class=iconbtn onclick="dismissNudge()" aria-label="Dismiss"><i data-lucide="x" aria-hidden=true></i></button>
+    <button class=btnico @click="fetchUpload($event.currentTarget)"><i data-lucide="download" aria-hidden=true></i>Update now</button>
+    <button class=iconbtn @click="updDismissed = true" aria-label="Dismiss"><i data-lucide="x" aria-hidden=true></i></button>
   </div>
 
   <section class=lead>
     <h2>Point your devices at this DNS</h2>
-    <div class=ip><b id=dnsip>…</b> <button class=btnico onclick="copyIP()"><i data-lucide="copy" aria-hidden=true></i>Copy IP</button> <button class=btnico onclick="testDns(event)"><i data-lucide="activity" aria-hidden=true></i>Test DNS</button> <span id=dnstest class=note></span></div>
+    <div class=ip><b id=dnsip x-text="s ? s.ip : '…'">…</b> <button class=btnico @click="copyIP()"><i data-lucide="copy" aria-hidden=true></i>Copy IP</button> <button class=btnico @click="testDns($event.currentTarget)"><i data-lucide="activity" aria-hidden=true></i>Test DNS</button> <span id=dnstest class=note :class="dnsCls" x-text="dnsMsg"></span></div>
     <div class=note>A DNS server must be an <b>IP address</b> (not the <code>esp-adblock.local</code> name). Set it on your router's DHCP or per device. Set a static <code>WIFI_IP</code> in config.env to keep it from changing.</div>
   </section>
 
   <section>
     <div class=status>
-      <span class=dot id=blockdot aria-hidden=true></span><b id=blockstate data-on=1>Blocking active</b>
+      <span class=dot id=blockdot aria-hidden=true>
+        <span x-show="blocking"><i data-lucide="shield-check"></i></span>
+        <span x-show="!blocking"><i data-lucide="pause"></i></span>
+      </span><b id=blockstate x-text="statusText">Blocking active</b>
       <span class=spacer></span>
-      <span class=field id=pausedurwrap>for <select id=pausedur aria-label="Pause duration"><option value=30>30s</option><option value=300 selected>5 min</option><option value=1800>30 min</option><option value=0>until I turn it back on</option></select></span>
-      <button id=pausebtn onclick="togglePause(event)">Pause</button>
+      <span class=field id=pausedurwrap x-show="blocking">for <select id=pausedur aria-label="Pause duration" x-model.number="pausedur"><option value=30>30s</option><option value=300>5 min</option><option value=1800>30 min</option><option value=0>until I turn it back on</option></select></span>
+      <button id=pausebtn class=btnico @click="togglePause($event.currentTarget)"><span x-show="blocking"><i data-lucide="pause" aria-hidden=true></i></span><span x-show="!blocking"><i data-lucide="play" aria-hidden=true></i></span><span x-text="blocking ? 'Pause' : 'Resume'">Pause</span></button>
     </div>
   </section>
 
   <section class=card>
-    <div id=sum><div class=loading><span class=spinner></span>Loading…</div></div>
-    <div class="devline note" id=dev></div>
-    <details class=devline id=devraw><summary class=note>Network details</summary><div id=devnums class=note></div></details>
+    <div id=sum>
+      <div class=loading x-show="!s"><span class=spinner></span>Loading…</div>
+      <template x-if="s">
+        <div>
+          <div class=kpis>
+            <div class=kpi><span class="kpi-n a" :title="fmt(s.blocked)" x-text="fmtc(s.blocked)"></span><span class=kpi-l>blocked</span></div>
+            <div class=kpi><span class=kpi-n :title="fmt(s.allowed)" x-text="fmtc(s.allowed)"></span><span class=kpi-l>allowed</span></div>
+            <div class=kpi><span class=kpi-n :title="fmt(s.domains)" x-text="fmtc(s.domains)"></span><span class=kpi-l>on the blocklist</span></div>
+          </div>
+          <div class=mbar>
+            <div class=mrow title="blocked / (blocked + allowed) — how much DNS traffic was sinkholed"><span class=ml>lookups blocked</span><div class="m c-ok"><span :style="'width:'+pct+'%'"></span></div><span class=mv x-text="pct+'%'"></span></div>
+            <div class=mrow title="share of HTML pages served that got the privacy-header rewrite (live, persisted). 0% when the privacy level is Off."><span class=ml>header rewriter</span><div class="m c-hdr"><span :style="'width:'+hPct+'%'"></span></div><span class=mv x-text="hPct+'%'"></span></div>
+            <div class=mrow title="average of the two — overall protection (0 if a dimension is off)"><span class=ml>blocked + rewriters</span><div class="m c-all"><span :style="'width:'+allPct+'%'"></span></div><span class=mv x-text="allPct+'%'"></span></div>
+          </div>
+          <div class=ratio-cap x-text="'GAFM '+gafTotal+'% of lookups'"></div>
+          <div class=gbar aria-hidden=true><template x-for="g in gf" :key="g.cls"><span :class="g.cls" :style="'width:'+g.pct+'%'" :title="g.name+' '+g.pct+'%'"></span></template></div>
+          <div class=ratio-cap style="margin-top:5px" x-text="gafamCaption"></div>
+          <div class=ratio-cap x-text="'DNSSEC: '+dnssPct+'% of answers validated · '+plLine"></div>
+        </div>
+      </template>
+    </div>
+    <div class="devline note" id=dev :class="health.cls" x-text="netLine"></div>
+    <details class=devline id=devraw><summary class=note>Network details</summary><div id=devnums class=note x-text="netNums"></div></details>
+  </section>
+
+  <section class=card id=geocard>
+    <h2><i data-lucide="globe" aria-hidden=true></i> Where traffic goes</h2>
+    <div class=note style=margin-bottom:10px>Estimated destination from the IPs this device resolved, since the last reboot. Grey means unknown or too mixed to call.</div>
+    <div class=geo>
+      <div class=geomap id=geomap aria-hidden=true></div>
+      <div>
+        <ol class=geolist>
+          <template x-for="c in geoTop" :key="c.cc">
+            <li><span class=gc x-text="c.cc"></span><span class=gn x-text="c.name"></span><span class=gv x-text="c.n"></span><span class=gv x-text="c.pct+'%'"></span></li>
+          </template>
+        </ol>
+        <p class=note x-show="!geoTop.length">No resolved lookups yet since the reboot.</p>
+      </div>
+    </div>
+    <div class=ratio-cap x-text="geoFoot"></div>
   </section>
 
   <section>
-    <h2><i data-lucide="history" aria-hidden=true></i> Recently blocked <span id=evn class=note></span></h2>
-    <div class="row tight" style=margin-bottom:8px><input id=efilter class=filter placeholder="filter by host" aria-label="Filter recently blocked by host"></div>
-    <div class="twrap" role=region tabindex=0 aria-label="Recently blocked, scrolls horizontally"><table id=evt><thead><tr><th>Website</th><th>Client</th><th>When</th><th><span class=note>Action</span></th></tr></thead><tbody></tbody></table></div>
+    <h2><i data-lucide="history" aria-hidden=true></i> Recently blocked <span id=evn class=note x-text="ev.length ? '('+ev.length+')' : ''"></span></h2>
+    <div class="row tight" style=margin-bottom:8px><input id=efilter class=filter placeholder="filter by host" aria-label="Filter recently blocked by host" x-model="qe"></div>
+    <div class="twrap" role=region tabindex=0 aria-label="Recently blocked, scrolls horizontally"><table id=evt><thead><tr><th>Website</th><th>Client</th><th>When</th><th style=text-align:right><span class=note>Action</span></th></tr></thead><tbody>
+      <template x-for="e in shownEvents" :key="e.seq">
+        <tr>
+          <td><div class=host><span class="av" :class="avCls(e.gaf)" x-text="avatarLetter(e.host)"></span><span x-text="e.host"></span></div></td>
+          <td class=mono :title="(e.name ? e.name+' — ' : '')+(e.cip||'')+(e.mac ? ' ('+e.mac+')' : '')" x-text="e.name || e.mac || e.cip || ''"></td>
+          <td style=color:var(--muted) x-text="when(e)"></td>
+          <td style=text-align:right><button class="alw btnico" :aria-label="'Allow '+e.host" @click="allowHost(e.host)"><i data-lucide="check" aria-hidden=true></i>allow</button></td>
+        </tr>
+      </template>
+      <template x-if="!shownEvents.length"><tr><td colspan=4 class=empty x-text="qe ? 'No match' : 'Nothing blocked yet. Blocked sites show up here.'"></td></tr></template>
+    </tbody></table></div>
     <div class=note style=margin-top:6px>Choose <b>allow</b> to let a site through (it stays unblocked).</div>
   </section>
 
   <section>
     <h2><i data-lucide="monitor-smartphone" aria-hidden=true></i> Devices on your network</h2>
-    <div class="row tight" style=margin-bottom:8px><input id=cfilter class=filter placeholder="filter by IP or MAC" aria-label="Filter devices by IP or MAC"></div>
+    <div class="row tight" style=margin-bottom:8px><input id=cfilter class=filter placeholder="filter by IP or MAC" aria-label="Filter devices by IP or MAC" x-model="qc"></div>
     <div class="twrap" role=region tabindex=0 aria-label="Devices, scrolls horizontally"><table id=ct><thead><tr>
-      <th id=th-ip aria-sort=none><button class=sortbtn onclick="setCS('ip')">Device <span id=cs-ip></span></button></th>
+      <th id=th-ip :aria-sort="sortAria('ip')"><button class=sortbtn @click="setSort('ip')">Device <span x-text="arrow('ip')"></span></button></th>
       <th>Name</th>
-      <th id=th-mac aria-sort=none><button class=sortbtn onclick="setCS('mac')">MAC <span id=cs-mac></span></button></th>
-      <th id=th-blocked aria-sort=descending><button class=sortbtn onclick="setCS('blocked')">Blocked <span id=cs-blocked></span></button></th>
-      <th id=th-allowed aria-sort=none><button class=sortbtn onclick="setCS('allowed')">Allowed <span id=cs-allowed></span></button></th>
-      <th><span class=note>Pause</span></th>
-    </tr></thead><tbody></tbody></table></div>
+      <th id=th-mac :aria-sort="sortAria('mac')"><button class=sortbtn @click="setSort('mac')">MAC <span x-text="arrow('mac')"></span></button></th>
+      <th id=th-blocked :aria-sort="sortAria('blocked')"><button class=sortbtn @click="setSort('blocked')">Blocked <span x-text="arrow('blocked')"></span></button></th>
+      <th id=th-allowed :aria-sort="sortAria('allowed')"><button class=sortbtn @click="setSort('allowed')">Allowed <span x-text="arrow('allowed')"></span></button></th>
+      <th style=text-align:right><span class=note>Pause</span></th>
+    </tr></thead><tbody>
+      <template x-for="c in shownClients" :key="c.ip">
+        <tr>
+          <td><div class=host><span x-text="c.ip"></span><span class="badge on" x-show="c.pac" :title="c.pac+' PAC request(s)'">PAC</span></div></td>
+          <td><input class=nm :data-ip="c.ip" x-init="fillName(c, $el)" @change="saveName(c, $event.target.value)" placeholder="name…" size=10 autocomplete=off :aria-label="'Name for '+c.ip"></td>
+          <td x-text="c.mac"></td>
+          <td class=a x-text="fmt(c.blocked)"></td>
+          <td style=color:var(--muted) x-text="fmt(c.allowed)"></td>
+          <td style=text-align:right>
+            <button class="csresume btnico" x-show="c.ps > 0" @click="resumeClient(c)" x-text="resumeLabel(c)"></button>
+            <button class="cspause btnico" x-show="!(c.ps > 0)" @click="pauseClient(c)">pause 1h</button>
+          </td>
+        </tr>
+      </template>
+      <template x-if="!shownClients.length"><tr><td colspan=6 class=empty x-text="qc ? 'No match' : 'No devices yet. They appear once a device uses this DNS.'"></td></tr></template>
+    </tbody></table></div>
   </section>
 
   <div class="row tight" style="justify-content:flex-end">
-    <button class=btnico onclick="advOpen()"><i data-lucide="settings" aria-hidden=true></i>Advanced settings</button>
+    <button class=btnico @click="openAdv()"><i data-lucide="settings" aria-hidden=true></i>Advanced settings</button>
   </div>
 
-  <div id=adv class=modal hidden>
+  <div id=adv class=modal x-show="adv" x-cloak @click.self="closeAdv()">
     <div class=modalbox role=dialog aria-modal=true tabindex=-1 aria-label="Advanced settings">
-      <div class=modalhead><b>Advanced settings</b><button class=iconbtn onclick="advClose()" aria-label="Close"><i data-lucide="x" aria-hidden=true></i></button></div>
+      <div class=modalhead><b>Advanced settings</b><button class=iconbtn @click="closeAdv()" aria-label="Close"><i data-lucide="x" aria-hidden=true></i></button></div>
       <div class=modalbody>
       <details class=sec open><summary>Everyday</summary>
         <h3>How blocked sites appear</h3>
         <div class="row tight" style=margin-bottom:8px>
-          <select id=bmode aria-label="How blocked sites appear"><option value=ip>Show the block page (recommended)</option><option value=zero>Answer 0.0.0.0 (silent)</option><option value=nxdomain>Say the site doesn't exist</option></select>
+          <select id=bmode aria-label="How blocked sites appear" x-model="cfg.bmode" @change="saveBlock('m', cfg.bmode)"><option value=ip>Show the block page (recommended)</option><option value=zero>Answer 0.0.0.0 (silent)</option><option value=nxdomain>Say the site doesn't exist</option></select>
         </div>
         <div class=col>
-          <label class=field><input type=checkbox id=v4only onchange="saveV4(event)"> IPv4-only (hide IPv6 addresses)</label>
-          <label class=field><input type=checkbox id=kw onchange="saveKw(event)"> Keyword block (ads and trackers)</label>
-          <label class=field><input type=checkbox id=rb onchange="saveRb(event)"> Block fake answers pointed at your home network <span class=note>(DNS rebinding)</span></label>
-          <label class=field><input type=checkbox id=ss onchange="saveSs(event)"> SafeSearch (needs IPv4-only)</label>
+          <label class=field><input type=checkbox id=v4only x-model="cfg.v4only" @change="saveBlock('v4', cfg.v4only?1:0)"> IPv4-only (hide IPv6 addresses)</label>
+          <label class=field><input type=checkbox id=kw x-model="cfg.kw" @change="saveBlock('kw', cfg.kw?1:0)"> Keyword block (ads and trackers)</label>
+          <label class=field><input type=checkbox id=rb x-model="cfg.rb" @change="saveBlock('rb', cfg.rb?1:0)"> Block fake answers pointed at your home network <span class=note>(DNS rebinding)</span></label>
+          <label class=field><input type=checkbox id=ss x-model="cfg.ss" @change="saveBlock('ss', cfg.ss?1:0)"> SafeSearch (needs IPv4-only)</label>
         </div>
       </details>
 
       <details class=sec><summary>Lists &amp; rules</summary>
-        <h3>Always-blocked websites</h3>
-        <div class="row tight" style=margin-bottom:8px><input id=dom placeholder="ads.example.com" size=28 aria-label="Domain to always block"><button class=btnico onclick="addDom(event)"><i data-lucide="plus" aria-hidden=true></i>Block</button></div>
-        <div class=twrap role=region tabindex=0 aria-label="Always-blocked sites"><table id=cl><tbody></tbody></table></div>
-
-        <h3>Wildcard rules</h3>
-        <div class="row tight" style=margin-bottom:8px><input id=wild placeholder="*.ads.example.com" size=28 aria-label="Wildcard block pattern"><button class=btnico onclick="addWild(event)"><i data-lucide="plus" aria-hidden=true></i>Block</button></div>
-        <div class=twrap role=region tabindex=0 aria-label="Wildcard rules"><table id=wl><tbody></tbody></table></div>
+        <h3>Blocked sites &amp; patterns</h3>
+        <div class="row tight" style=margin-bottom:8px><input id=dom placeholder="ads.example.com  (or wildcard: ads*.example.com)" size=36 aria-label="Domain or wildcard pattern to block" x-model="newDom"><button class=btnico @click="addDom()"><i data-lucide="plus" aria-hidden=true></i>Block</button></div>
+        <div class=note style=margin-bottom:10px>A plain domain blocks it <b>and all its subdomains</b> — no <code>*</code> needed. Use <code>*</code> only for patterns a domain can't express (<code>ads*.example.com</code>, <code>*tracker*</code>).</div>
+        <div class=twrap role=region tabindex=0 aria-label="Blocked domains and patterns"><table id=cl><tbody>
+          <template x-for="d in blockList" :key="d"><tr><td><div class=host x-text="d"></div></td><td style=text-align:right><button class="rmbtn btnico" :data-d="d" @click="removeRule(d)"><i data-lucide="trash-2" aria-hidden=true></i>remove</button></td></tr></template>
+          <template x-if="!blockList.length"><tr><td colspan=2 class=empty>No blocked sites or patterns yet.</td></tr></template>
+        </tbody></table></div>
 
         <h3>Rules file (/rules.cfg)</h3>
-        <div class=note style=margin-bottom:8px>One rule per line: <code>block &lt;d&gt;</code>, <code>wildcard *.x.y</code>, <code>allow &lt;d&gt;</code>, <code>keyword &lt;t&gt;</code> (AdGuard <code>||d</code> / <code>@@||d</code> also work). Editing here replaces the whole file.</div>
-        <textarea id=rules style="width:100%;height:150px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace" aria-label="Rules file"></textarea>
-        <div class="row tight" style=margin-top:8px><button class=btnico onclick="saveRulesFile()"><i data-lucide="check" aria-hidden=true></i>Save</button><span id=rulesmsg class=note aria-live=polite></span></div>
+        <div class=note style=margin-bottom:8px>One rule per line: <code>block &lt;d&gt;</code>, <code>wildcard *.x.y</code>, <code>allow &lt;d&gt;</code>, <code>keyword &lt;t&gt;</code>, <code>url &lt;substr&gt;</code> (AdGuard <code>||d</code> / <code>@@||d</code> also work). <code>url</code> blocks a URL the client's PAC sees (path included) — needs the PAC set on the device; see Proxy below. Editing here replaces the whole file.</div>
+        <textarea id=rules x-model="rules" style="width:100%;height:150px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace" aria-label="Rules file"></textarea>
+        <div class="row tight" style=margin-top:8px><button class=btnico @click="saveRulesFile()"><i data-lucide="check" aria-hidden=true></i>Save</button><span id=rulesmsg class=note aria-live=polite x-text="rulesMsg"></span></div>
 
         <h3>Local names (this device answers these)</h3>
-        <div class="row tight" style=margin-bottom:8px><input id=hname placeholder="nas.lan" size=16 aria-label="Local name"><input id=hip placeholder="192.168.0.10" size=14 aria-label="IP address for the local name"><button class=btnico onclick="addHost(event)"><i data-lucide="plus" aria-hidden=true></i>Add</button></div>
-        <div class=twrap role=region tabindex=0 aria-label="Local names"><table id=ht><tbody></tbody></table></div>
+        <div class="row tight" style=margin-bottom:8px><input id=hname placeholder="nas.lan" size=16 aria-label="Local name" x-model="newHost"><input id=hip placeholder="192.168.0.10" size=14 aria-label="IP address for the local name" x-model="newIp"><button class=btnico @click="addHost()"><i data-lucide="plus" aria-hidden=true></i>Add</button></div>
+        <div class=twrap role=region tabindex=0 aria-label="Local names"><table id=ht><tbody>
+          <template x-for="e in hostsList" :key="e.n"><tr><td x-text="e.n"></td><td x-text="e.ip"></td><td style=text-align:right><button class="hrm btnico" :data-n="e.n" :data-ip="e.ip" @click="removeHost(e)"><i data-lucide="trash-2" aria-hidden=true></i>remove</button></td></tr></template>
+          <template x-if="!(s && (s.hosts||[]).length)"><tr><td colspan=3 class=empty>No local names yet.</td></tr></template>
+        </tbody></table></div>
       </details>
 
       <details class=sec><summary>Privacy &amp; network</summary>
         <h3>Page security headers</h3>
         <div class="row tight" style=margin-bottom:8px>
-          <select id=plsel aria-label="Page security header level" onchange="savePl(event)"><option value=0>Off</option><option value=1>Basic</option><option value=2>Standard</option><option value=3>Strict</option></select>
+          <select id=plsel aria-label="Page security header level" x-model.number="cfg.pl" @change="saveBlock('pl', cfg.pl)"><option value=0>Off</option><option value=1>Basic</option><option value=2>Standard</option><option value=3>Strict</option></select>
           <span class=note>Extra security headers on the pages this device serves.</span>
         </div>
-        <div class=note id=privline></div>
+        <div class=note id=privline x-text="privText"></div>
 
         <h3>Proxy (PAC)</h3>
-        <div class="row tight"><input id=pxy placeholder="proxy.example.com:8080" size=24 aria-label="Proxy host and port"><button class=btnico onclick="saveProxy(event)"><i data-lucide="check" aria-hidden=true></i>Save</button></div>
-        <div class=note style=margin-top:6px>Point your browser or OS automatic-proxy setting to <a href="/proxy.pac" target=_blank>/proxy.pac</a>. Leave empty for direct.</div>
+        <div class="row tight"><input id=pxy placeholder="proxy.example.com:8080" size=24 aria-label="Proxy host and port" x-model="cfg.pxy"><button class=btnico @click="saveProxy()"><i data-lucide="check" aria-hidden=true></i>Save</button></div>
+        <div class=note style=margin-top:6px>Point your browser/OS <b>automatic proxy (PAC)</b> setting to <code>http://<span class=pacip x-text="s ? s.ip : ''"></span>/proxy.pac</code> (or the WPAD alias <code>/wpad.dat</code>). <code>url</code> rules (above) then route matching URLs here to be dropped — no proxy/cert needed. The <b>Proxy address</b> below is a separate, real proxy for everything else; leave empty for direct.</div>
 
         <h3>Send logs to another machine (optional)</h3>
-        <div class="row tight"><input id=shost placeholder="host (empty = off)" size=18 aria-label="Syslog host"><input id=sport value=514 size=4 style=width:64px aria-label="Syslog port"><button class=btnico onclick="saveSyslog(event)"><i data-lucide="check" aria-hidden=true></i>Save</button></div>
+        <div class="row tight"><input id=shost placeholder="host (empty = off)" size=18 aria-label="Syslog host" x-model="cfg.shost"><input id=sport size=4 style=width:64px aria-label="Syslog port" x-model.number="cfg.sport"><button class=btnico @click="saveSyslog()"><i data-lucide="check" aria-hidden=true></i>Save</button></div>
       </details>
 
       <details class=sec><summary>Upstream DNS</summary>
         <h3>Servers to forward to</h3>
         <div class=note style=margin-bottom:8px>One IPv4 per line (up to 4). The device probes each server every minute and forwards to the fastest; two failed probes switch away immediately.</div>
-        <textarea id=dnsservers style="width:100%;height:84px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace" aria-label="Upstream DNS servers"></textarea>
-        <div class="row tight" style=margin-top:8px><button class=btnico onclick="saveDns(event)"><i data-lucide="check" aria-hidden=true></i>Save</button><span id=dnsmsg class=note aria-live=polite></span></div>
-        <div class="note" id=dnsnow style="margin-top:8px"></div>
+        <textarea id=dnsservers x-model="cfg.dnsservers" style="width:100%;height:84px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace" aria-label="Upstream DNS servers"></textarea>
+        <div class="row tight" style=margin-top:8px><button class=btnico @click="saveDns()"><i data-lucide="check" aria-hidden=true></i>Save</button><span id=dnsmsg class=note aria-live=polite x-text="dnsSaveMsg"></span></div>
+        <div class=note id=dnsnow style=margin-top:8px x-text="dnsListText"></div>
       </details>
 
       <details class=sec><summary>Maintenance</summary>
         <h3>Blocklist</h3>
-        <form id=upf class="row tight" style=margin-bottom:6px><input type=file id=blf accept=.bin aria-label="Blocklist file"><button class=btnico><i data-lucide="upload" aria-hidden=true></i>Upload blocklist</button><span id=upmsg class=note aria-live=polite></span></form>
-        <div class=note style=margin-bottom:10px>Build <code>blocklist.bin</code> with <code>tools/build_bloom.py</code>, then upload here. No USB.</div>
-        <div class="row tight"><input id=uurl placeholder="https://host/blocklist.bin" size=38 aria-label="Blocklist URL"><button class=btnico onclick="fetchUpload(event)"><i data-lucide="download" aria-hidden=true></i>Download &amp; upload</button></div>
-        <div class=note style=margin-top:6px><b>Download &amp; upload</b> runs in your browser (it does the HTTPS) and sends the file to <code>/upload</code> — no TLS on the device. Needs a CORS-enabled URL (<code>raw.githubusercontent.com</code>, <code>cdn.jsdelivr.net</code>); a GitHub <i>release</i> asset isn't — open it in a tab and drop it in <i>Upload</i> above. Last update: <span id=ustat>—</span></div>
+        <form id=upf class="row tight" style=margin-bottom:6px @submit.prevent="uploadBlocklist($event)"><input type=file id=blf accept=.bin aria-label="Blocklist file"><button class=btnico><i data-lucide="upload" aria-hidden=true></i>Upload blocklist</button><span id=upmsg class=note aria-live=polite x-text="upMsg"></span></form>
+        <div class=note style=margin-bottom:10px>Build <code>blocklist.bin</code> with <code>tools/build_bin_list_block.py</code>, then upload here. No USB.</div>
+        <div class="row tight"><input id=uurl placeholder="https://raw.githubusercontent.com/joaoeudes7/esp-adblock/blocklist/blocklist.bin" size=38 aria-label="Blocklist URL" x-model="blUrl" @change="rememberUrl()"><button class=btnico @click="fetchUpload($event.currentTarget)"><i data-lucide="download" aria-hidden=true></i>Download &amp; upload</button></div>
+        <div class=note style=margin-top:6px><b>Download &amp; upload</b> runs in your browser (it does the HTTPS) and sends the file to <code>/upload</code> — no TLS on the device. Needs a CORS-enabled URL (<code>raw.githubusercontent.com</code>, <code>cdn.jsdelivr.net</code>); a GitHub <i>release</i> asset isn't — open it in a tab and drop it in <i>Upload</i> above. Last update: <span id=ustat x-text="ustat">—</span></div>
 
         <h3>Counters</h3>
-        <div class="row tight"><span class=note>Persisted across reboots. Reset zeroes blocked/allowed/cached, per&#8209;client counts and the recent list.</span><button class=btnico onclick="resetStats(event)"><i data-lucide="trash-2" aria-hidden=true></i>Reset</button></div>
+        <div class="row tight"><span class=note>Persisted across reboots. Reset zeroes blocked/allowed/cached, per&#8209;client counts and the recent list.</span><button class=btnico @click="resetStats($event.currentTarget)"><i data-lucide="trash-2" aria-hidden=true></i>Reset</button></div>
 
         <div class=danger>
           <div class="note" style=margin-bottom:4px><b>Danger zone</b> — these can brick the device or lock you out. There is no undo.</div>
           <h3>Firmware update</h3>
           <div class=note style=margin-bottom:8px>Replaces the firmware and reboots. A wrong file can brick it. Do not cut power. If it fails, re-flash over USB.</div>
-          <form id=fwf class="row tight"><input type=file id=fwb accept=.bin aria-label="Firmware file"><button class=btnico><i data-lucide="upload" aria-hidden=true></i>Flash firmware</button><span id=fwmsg class=note aria-live=polite></span></form>
+          <form id=fwf class="row tight" @submit.prevent="uploadFirmware($event)"><input type=file id=fwb accept=.bin aria-label="Firmware file"><button class=btnico><i data-lucide="upload" aria-hidden=true></i>Flash firmware</button><span id=fwmsg class=note aria-live=polite x-text="fwMsg"></span></form>
         </div>
         <h3>Wi-Fi</h3>
-        <div id=wifiview class="row tight"><span class=note>Connected to <b id=curssid>—</b></span><button class=btnico onclick="wifiEdit(true)">Change</button></div>
-        <div id=wifiform hidden>
-          <div class="row tight"><select id=wnet aria-label="Wi-Fi network"></select><button class=iconbtn onclick="wifiScan(event)" aria-label="Scan for networks" title="Scan"><i data-lucide="refresh-cw" aria-hidden=true></i></button></div>
-          <div class="row tight" style=margin-top:8px><input id=wpass type=password placeholder="password" size=16 aria-label="Wi-Fi password"><button class=btnico onclick="saveWifi(event)">Connect</button></div>
+        <div id=wifiview class="row tight" x-show="!wifiEd"><span class=note>Connected to <b id=curssid x-text="s && s.ssid ? s.ssid : '—'">—</b></span><button class=btnico @click="wifiEdit(true)">Change</button></div>
+        <div id=wifiform x-show="wifiEd" x-cloak>
+          <div class="row tight"><select id=wnet aria-label="Wi-Fi network" x-model="selNet"><option value="" x-show="!nets.length" x-text="nets.length ? '' : (wifiMsg || 'Scanning…')"></option><template x-for="n in nets" :key="n.s"><option :value="n.s" x-text="n.s+(n.e?'':' (open)')+' · '+n.r+' dBm'"></option></template></select><button class=iconbtn @click="wifiScan($event.currentTarget)" aria-label="Scan for networks" title="Scan"><i data-lucide="refresh-cw" aria-hidden=true></i></button></div>
+          <div class="row tight" style=margin-top:8px><input id=wpass type=password placeholder="password" size=16 aria-label="Wi-Fi password" x-model="wpass"><button class=btnico @click="saveWifi($event.currentTarget)">Connect</button></div>
           <div class=note style=margin-top:6px>Tests the network before saving; if it fails, stays on the current one. To reset Wi-Fi, hold BOOT at power-on.</div>
         </div>
       </details>
@@ -276,16 +369,21 @@ tr.new td{animation:fade 1.6s ease-out}
     </div>
   </div>
 </main>
-<div id=toasts aria-live=polite></div>
-<script type="text/javascript" src="https://cdn.jsdelivr.net/gh/vanjs-org/van/public/van-1.6.1.nomodule.min.js"></script>
+<div id=toasts aria-live=polite>
+  <template x-for="t in toasts" :key="t.id">
+    <div class=toast :class="t.err ? 'err' : ''"><span x-text="t.msg"></span><button x-show="t.undo" @click="undoToast(t)" style=margin-left:10px>Undo</button></div>
+  </template>
+</div>
+<!-- Alpine loads AFTER the app script: it starts in a queueMicrotask, before the parser
+     reaches the next script tag, so the `alpine:init` listener must already be registered. -->
 <script>
-const {div,span,td,tr,button,i,input} = van.tags
 // Inline Lucide icon set (only the icons this page uses) — no CDN, no runtime.
 const LUCIDE={
 'shield-check':'<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
 'triangle-alert':'<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
 'copy':'<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
 'activity':'<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
+'globe':'<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
 'history':'<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
 'monitor-smartphone':'<path d="M18 8V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h8"/><path d="M10 19v-3.96 3.15"/><path d="M7 19h5"/><rect width="6" height="10" x="16" y="12" rx="2"/>',
 'settings':'<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/>',
@@ -300,209 +398,388 @@ const LUCIDE={
 'play':'<path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"/>'
 }
 function createIcons(){document.querySelectorAll('i[data-lucide]').forEach(el=>{const b=LUCIDE[el.getAttribute('data-lucide')];if(!b)return;const s=document.createElementNS('http://www.w3.org/2000/svg','svg');s.setAttribute('class','lucide');s.setAttribute('viewBox','0 0 24 24');s.setAttribute('fill','none');s.setAttribute('stroke','currentColor');s.setAttribute('stroke-width','2');s.setAttribute('stroke-linecap','round');s.setAttribute('stroke-linejoin','round');s.setAttribute('aria-hidden',el.getAttribute('aria-hidden')||'true');s.innerHTML=b;el.replaceWith(s)})}
-const lucide={createIcons}
-const ic=n=>i({'data-lucide':n,'aria-hidden':'true'})
-const LU=()=>{try{lucide.createIcons()}catch(_){}}
+function LU(){try{createIcons()}catch(_){}}
 window.addEventListener('error',ev=>{const b=document.getElementById('boot');if(b&&!b.classList.contains('off'))b.textContent='Script error: '+(ev.message||'unknown')})
-const S = van.state(null)          // stats object
-const EV = van.state([])           // accumulated recent-blocked events
-const CQ = van.state(''), EQ = van.state('')
-const CS = van.state({key:'blocked',dir:-1})
-let evLast=0, lastOk=0, pauseEnd=0, rulesInit=0, bootSeen=null, selNet='', lastErr=false, updDismissed=false
-wnet.addEventListener('change',e=>{if(e.target.name==='wnet')selNet=e.target.value})
 const CSRF_HDRS={'X-Requested-With':'esp-adblock'}
-function fmt(n){return (n|0).toLocaleString()}
-// "· upstream 1.1.1.1 (12 ms)" for the always-visible network line.
-function dnsNow(s){const cur=(s.dnslist||[]).find(d=>d.cur);if(!s.upstream)return ''
-  return ' · upstream '+s.upstream+(cur?(cur.ms<0?' (timeout)':cur.ms?' ('+cur.ms+' ms)':' (probing…)'):'')}
-function fmtc(n){n=n|0;if(n<1000)return String(n);const u=['','k','M','B','T'];let i=0,x=n;while(x>=1000&&i<4){x/=1000;i++}return (x>=100?Math.round(x):x.toFixed(1).replace(/\.0$/,''))+u[i]}
-function toast(msg,err,undo){const t=div({class:'toast'+(err?' err':'')},msg);if(undo){const b=document.createElement('button');b.textContent='Undo';b.style.marginLeft='10px';b.onclick=()=>{b.disabled=true;act(null,undo,'Reverted');t.remove()};t.appendChild(b)}toasts.appendChild(t);setTimeout(()=>t.remove(),undo?7000:2600)}
-function copyIP(){const t=dnsip.textContent,ok=()=>toast('IP copied');
-  if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(t).then(ok,fb);return}
-  fb();
-  function fb(){const a=document.createElement('textarea');a.value=t;a.setAttribute('readonly','');a.style.position='fixed';a.style.opacity='0';document.body.appendChild(a);a.select();
-    try{document.execCommand('copy')?ok():toast('Copy failed',1)}catch(_){toast('Copy failed',1)}a.remove()}}
-function testDns(e){const el=document.getElementById('dnstest');if(!el)return;const b=e&&e.currentTarget;if(b)b.disabled=true;
-  el.className='note';el.textContent='testing…';
-  const n='t'+Math.random().toString(36).slice(2,10)+'.dnscheck';      // random subdomain defeats caches
-  const ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),4000);
-  fetch('http://'+n+'/__dnscheck',{mode:'no-cors',cache:'no-store',signal:ctl.signal})
-    .then(()=>{el.className='note ok';el.textContent='✓ this device is using this DNS';})
-    .catch(()=>{el.className='note bad';el.textContent='✗ not using this DNS (or secure-DNS/DoH is on)';})
-    .finally(()=>{clearTimeout(to);if(b)b.disabled=false})}
-async function act(btn,url,ok,undo){ if(btn)btn.disabled=true
-  try{ const r=await fetch(url,{headers:CSRF_HDRS}); toast(r.ok?(ok||'Done'):('Failed ('+r.status+'). Try again.'), !r.ok, r.ok?undo:null) }
-  catch(_){ toast('Network error',1) }
-  if(btn)btn.disabled=false; load() }const empty=(c,m)=>tr(td({class:'empty',colspan:c},m))
-const arrow=(st,k)=>st.key===k?(st.dir<0?'▼':'▲'):''
-const MUTED={style:'color:var(--muted)'}
-function setSort(ids,active,dir){for(const id of ids){const el=document.getElementById(id);if(el)el.setAttribute('aria-sort',id===active?(dir<0?'descending':'ascending'):'none')}}
-function setCS(k){const c=CS.val;const dir=c.key===k?-c.dir:-1;CS.val={key:k,dir};setSort(['th-ip','th-mac','th-blocked','th-allowed'],'th-'+k,dir);render()}
+const boot=document.getElementById('boot'), loadbar=document.getElementById('loadbar')
+const enc=encodeURIComponent
+let evLast=0, lastOk=0, lastErr=false, bootSeen=null, rulesInit=0, advOpener=null, toastId=0, started=false
 
-// Imperative render: van.add(el, ...nodes) takes N children (arrays returned from a
-// function child are NOT flattened by VanJS, so we build the list ourselves).
-function render(){
-  const s=S.val
-  sum.replaceChildren(); dev.textContent=''
-  if(s){
-    const tot=(s.blocked+s.allowed)||1, pct=Math.round(s.blocked/tot*100)
-    van.add(sum,
-      div({class:'kpis'},
-        div({class:'kpi'},span({class:'kpi-n a',title:fmt(s.blocked)},fmtc(s.blocked)),span({class:'kpi-l'},'blocked')),
-        div({class:'kpi'},span({class:'kpi-n',title:fmt(s.allowed)},fmtc(s.allowed)),span({class:'kpi-l'},'allowed')),
-        div({class:'kpi'},span({class:'kpi-n',title:fmt(s.domains)},fmtc(s.domains)),span({class:'kpi-l'},'on the blocklist'))),
-      div({class:'ratio','aria-hidden':'true'},span({class:'seg',style:'width:'+pct+'%'})),
-      div({class:'ratio-cap'},pct+'% of lookups blocked'),
-      div({class:'ratio-cap'},'Privacy headers: '+(s.pl?(['','basic','standard','strict'][s.pl]+' · '+fmt(s.php||0)+' pages shielded'):'off')))
-    privline.textContent = s.pl ? ((s.ph||0)+'/'+(s.pht||0)+' security headers served') : 'Off'
-    const rssi=s.rssi||0
-    const health = s.dnsTo>2 ? ['DNS timeouts, check your upstream resolver','bad']
-      : s.dns>350 ? ['DNS is slow ('+s.dns+' ms)','bad']
-      : rssi<-75 ? ['Weak Wi-Fi signal','bad']
-      : rssi<-67 ? ['Wi-Fi is a bit weak',''] : ['Healthy','ok']
-    dev.className='devline note '+(health[1]||''); dev.textContent='Network: '+health[0]+dnsNow(s)
-    devnums.textContent='Wi-Fi '+rssi+' dBm'+(s.vcc?' · '+(s.vcc/1000).toFixed(2)+' V':'')+(s.dns?' · DNS '+s.dns+' ms (forward '+(s.dnsf||0)+', device '+(s.dnsl||0)+')':'')+(s.dnsTo?' · '+s.dnsTo+' timeout'+(s.dnsTo>1?'s':''):'')+(s.doh?' · '+s.doh+' encrypted-DNS attempts':'')+(s.pf?' · '+s.pf+' probe timeout'+(s.pf>1?'s':''):'')
+const EMPTY_CFG={bmode:'ip',v4only:false,kw:false,rb:false,ss:false,pl:0,shost:'',sport:514,pxy:'',dnsservers:''}
+
+// `state` is reassigned to Alpine's reactive proxy in init(): writes made from load()
+// and the handlers must go through that proxy or they won't trigger any effects.
+let geoKey = '', worldSvg = null, regionNames = null
+function regionName(cc){
+  try{
+    if(!regionNames) regionNames = new Intl.DisplayNames(['en'], {type:'region'})
+    return regionNames.of(cc) || cc
+  }catch(_){ return cc }   // older browser: ISO code is still readable
+}
+let state = {
+  // server snapshot + derived views
+  s:null, ev:[], qe:'', qc:'', sortKey:'blocked', sortDir:-1,
+  pausedur:300, pauseIn:0, conn:'connecting',
+  cfg:{...EMPTY_CFG}, adv:false, wifiEd:false, nets:[], selNet:'', wifiMsg:'', wpass:'',
+  rules:'', rulesMsg:'', dnsSaveMsg:'', dnsListText:'', upMsg:'', fwMsg:'',
+  dnsMsg:'', dnsCls:'note', updDismissed:false,
+  blUrl: localStorage.getItem('blUrl') || 'https://raw.githubusercontent.com/joaoeudes7/esp-adblock/blocklist/blocklist.bin',
+  blUrlSaved: !!localStorage.getItem('blUrl'),
+  newDom:'', newHost:'', newIp:'', toasts:[],
+
+  // Alpine calls init() with `this` = the reactive proxy. Capture it, then start polling.
+  init(){ state = this; started = true; load(); autoTick(5000) },
+
+  // --- derived state: no manual render, no DOM ids -------------------------
+  get blocking(){ return !this.s || this.s.blocking!==false },
+  get statusText(){ return this.blocking ? 'Blocking active' : (this.pauseIn>0 ? 'Paused — resumes in '+this.pauseIn+'s' : 'Paused') },
+  get connText(){ return this.conn==='online'?'online':this.conn==='offline'?'offline':'connecting…' },
+  get connCls(){ return this.conn==='online'?'on':this.conn==='offline'?'off':'connect' },
+  get pct(){ const s=this.s||{}; const t=(s.blocked+s.allowed)||1; return Math.round(s.blocked/t*100) },
+  get hPct(){ const s=this.s||{}; return s.psv?Math.min(100,Math.round((s.php||0)/s.psv*100)):0 },  // % of served pages that got the rewrite
+  get allPct(){ return Math.round((this.pct+this.hPct)/2) },
+  get gf(){
+    const g=(this.s&&this.s.gafam)||[0,0,0,0,0,0], t=g.reduce((a,b)=>a+b,0)
+    const nm=['Google','Apple','Meta','Amazon','Microsoft']   // GAFM only; "other" is the bar's background
+    return nm.map((n,i)=>({name:n, pct:t?Math.round(100*g[i]/t):0, cls:'s'+i}))
+             .filter(x=>x.pct>0).sort((a,b)=>b.pct-a.pct)     // order by share (desc)
+  },
+  get gafTotal(){ const g=(this.s&&this.s.gafam)||[0,0,0,0,0,0], t=g.reduce((a,b)=>a+b,0); return t?Math.round(100*(g[0]+g[1]+g[2]+g[3]+g[4])/t):0 },
+  get dnssPct(){ const d=this.s&&this.s.dnss; return d&&d[1]?Math.round(100*d[0]/d[1]):0 },
+  get plLine(){
+    const s=this.s||{}
+    return s.pl ? (['','basic','standard','strict'][s.pl]+' · '+fmt(s.php||0)+' pages shielded') : 'headers off'
+  },
+  get privText(){ const s=this.s||{}; return s.pl ? ((s.ph||0)+'/'+(s.pht||0)+' security headers served') : 'Off' },
+  get health(){
+    const s=this.s||{}, rssi=s.rssi||0
+    if(s.dnsTo>2) return {msg:'DNS timeouts, check your upstream resolver',cls:'bad'}
+    if(s.dns>350) return {msg:'DNS is slow ('+s.dns+' ms)',cls:'bad'}
+    if(rssi<-75) return {msg:'Weak Wi-Fi signal',cls:'bad'}
+    if(rssi<-67) return {msg:'Wi-Fi is a bit weak',cls:''}
+    return {msg:'Healthy',cls:'ok'}
+  },
+  get dnsNowText(){
+    const s=this.s; if(!s||!s.upstream) return ''
+    const cur=(s.dnslist||[]).find(d=>d.cur)
+    return ' · upstream '+s.upstream+(cur?(cur.ms<0?' (timeout)':cur.ms?' ('+cur.ms+' ms)':' (probing…)'):'')
+  },
+  get netLine(){ return this.s ? 'Network: '+this.health.msg+this.dnsNowText : '' },
+  get netNums(){
+    const s=this.s; if(!s) return ''
+    return 'Wi-Fi '+(s.rssi||0)+' dBm'+(s.vcc?' · '+(s.vcc/1000).toFixed(2)+' V':'')+(s.dns?' · DNS '+s.dns+' ms (forward '+(s.dnsf||0)+', device '+(s.dnsl||0)+')':'')+(s.dnsTo?' · '+s.dnsTo+' timeout'+(s.dnsTo>1?'s':''):'')+(s.doh?' · '+s.doh+' encrypted-DNS attempts':'')+(s.pac?' · PAC '+s.pac+' request'+(s.pac>1?'s':''):'')+(s.pf?' · '+s.pf+' probe timeout'+(s.pf>1?'s':''):'')
+  },
+  get ustat(){ const s=this.s||{}; return s.upat ? (Math.floor(s.upat/60)+'m ago') : 'not since boot' },
+  get dnsListText(){ return ((this.s&&this.s.dnslist)||[]).map(d=>d.ip+' — '+(d.ms<0?'timeout':d.ms?d.ms+' ms':'probing…')+(d.cur?' (in use)':'')).join('   ') },
+  get shownEvents(){
+    const q=this.qe.toLowerCase(); let a=this.ev
+    if(q) a=a.filter(e=>(e.host||'').toLowerCase().includes(q))
+    return a.slice(0,50)
+  },
+  get shownClients(){
+    const s=this.s||{}, {sortKey:k, sortDir:d}=this, q=this.qc.toLowerCase()
+    let cl=(s.clients||[]).slice()
+    cl.sort((x,y)=>((k==='ip'||k==='mac')?x[k].localeCompare(y[k]):(x[k]-y[k]))*d)
+    if(q) cl=cl.filter(c=>c.ip.includes(q)||c.mac.includes(q)||(c.name||'').toLowerCase().includes(q))
+    return cl
+  },
+  // The CSP build cannot parse array literals/arrow functions, so list defaults live here.
+  get customList(){ return (this.s&&this.s.custom)||[] },
+  get wildList(){ return (this.s&&this.s.wild)||[] },
+  get blockList(){ return [...this.customList, ...this.wildList] }, // one section: plain domains + wildcard patterns
+  get hostsList(){ return (this.s&&this.s.hosts)||[] },
+  get gafamCaption(){
+    const gf=this.gf
+    return gf.length ? gf.map(g=>g.name+' '+g.pct+'%').join(' · ') : 'no GAFM lookups yet'
+  },
+  // --- destination map (country counts from /14 IP blocks, RAM only) --------
+  get geoTop(){
+    const g=(this.s&&this.s.geo)||[], t=(this.s&&this.s.geoMapped)||0
+    return g.slice().sort((a,b)=>b[1]-a[1]).slice(0,6)
+      .map(e=>({cc:e[0], name:regionName(e[0]), n:fmt(e[1]), pct:t?Math.round(100*e[1]/t):0}))
+  },
+  get geoFoot(){
+    const s=this.s||{}; if(!s.geoMapped) return ''
+    const t=s.allowed||0
+    const share=t?Math.round(100*s.geoMapped/t):0
+    return fmt(s.geoMapped)+' resolved lookups mapped'+(t?' ('+share+'% of allowed)':'')+' · geo: DB-IP (CC BY 4.0)'
+  },
+  // Fetch the static SVG once, then recolour paths by ISO code. Re-render only when a
+  // country count changes, so the 5 s poll does not touch the DOM.
+  async renderGeo(){
+    const s=state.s||{}, g=s.geo||[]
+    const key=g.map(e=>e[0]+e[1]).join('|')+'#'+(s.geoMapped||0)
+    if(key===geoKey) return
+    geoKey=key
+    const box=document.getElementById('geomap')
+    if(!box) return
+    if(!worldSvg){
+      try{
+        const r=await fetch('/world.svg')
+        if(!r.ok) throw 0
+        worldSvg=await r.text()
+        box.innerHTML=worldSvg
+      }catch(_){ geoKey=''; box.innerHTML='<p class=note>Map unavailable.</p>'; return }
+    }
+    const total=s.geoMapped||0, hit={}
+    for(const e of g) hit[e[0]]=e[1]
+    box.querySelectorAll('[data-iso]').forEach(p=>{
+      const cc=p.getAttribute('data-iso'), n=hit[cc]||0
+      if(!n){ p.removeAttribute('data-n'); p.removeAttribute('title'); return }
+      const pct=total?100*n/total:0
+      p.setAttribute('data-n', pct>=12?'3':pct>=4?'2':'1')   // share of mapped lookups
+      p.setAttribute('title', regionName(cc)+': '+fmt(n)+' ('+Math.round(pct)+'%)')
+    })
+  },
+
+  // --- formatting helpers used by templates --------------------------------
+  fmt, fmtc,
+  when(e){ return new Date(e.at).toLocaleTimeString() },
+  // Local letter avatar: no network request (no 404s) and works offline. Colored by the
+  // provider index the device reports (gaf: 0..4 = GAFM, -1/absent = neutral).
+  avatarLetter(host){ const p=String(host||'').split('.'); const l=(p.length>=2?p[p.length-2]:p[0])||host||'?'; const m=l.match(/[a-z0-9]/i); return m?m[0]:'?' },
+  avCls(g){ return (g>=0&&g<5)?('av'+g):'avn' },   // provider color via CSS class (works in the CSP build)
+  resumeLabel(c){ return 'resume ('+Math.floor(c.ps/60)+'m)' },
+  fillName(c, el){ el.value = c.name || '' },   // x-init can't assign to $el.value in the CSP build
+  arrow(k){ return this.sortKey===k ? (this.sortDir<0?'▼':'▲') : '' },
+  sortAria(k){ return this.sortKey===k ? (this.sortDir<0?'descending':'ascending') : 'none' },
+  setSort(k){ const dir=this.sortKey===k ? -this.sortDir : -1; this.sortKey=k; this.sortDir=dir },
+
+  // --- network actions -----------------------------------------------------
+  load,
+  async act(btn, url, ok, undo){
+    if(btn) btn.disabled=true
+    try{
+      const r=await fetch(url,{headers:CSRF_HDRS})
+      if(r.status===401){ if(!unauth()) this.toast('Login required — reload the page',1) }
+      else this.toast(r.ok?(ok||'Done'):('Failed ('+r.status+'). Try again.'), !r.ok, r.ok?undo:null)
+    }catch(_){ this.toast('Network error',1) }
+    if(btn) btn.disabled=false
+    load()
+  },
+  toast(msg, err, undo){
+    const id=++toastId
+    this.toasts.push({id,msg,err,undo})
+    setTimeout(()=>{ this.toasts=this.toasts.filter(t=>t.id!==id) }, undo?7000:2600)
+  },
+  undoToast(t){ this.toasts=this.toasts.filter(x=>x.id!==t.id); this.act(null,t.undo,'Reverted') },
+
+  togglePause(btn){ this.act(btn, this.blocking ? '/pause?s='+this.pausedur : '/resume', this.blocking?'Blocking paused':'Blocking resumed') },
+  allowHost(h){ this.act(null,'/allow?d='+enc(h),'Allowed') },
+  pauseClient(c){ this.act(null,'/pauseclient?ip='+enc(c.ip)+'&s=3600','Paused for 1h') },
+  resumeClient(c){ this.act(null,'/pauseclient?ip='+enc(c.ip)+'&s=0','Resumed') },
+  saveName(c, v){
+    const n=(v||'').trim(); if(n===(c.name||'')) return
+    this.act(null,'/setname?ip='+enc(c.ip)+'&n='+enc(n),'Name saved')
+  },
+  saveBlock(k, v){ this.act(null,'/setblock?'+k+'='+enc(v),'Saved') },
+  addDom(){ const d=this.newDom.trim(); if(d){ this.act(null,'/addblock?d='+enc(d),'Added to blocklist'); this.newDom='' } },
+  removeRule(d){ this.act(null,'/unblock?d='+enc(d),'Removed','/addblock?d='+enc(d)) }, // domain or wildcard
+  addHost(){
+    const n=this.newHost.trim(), ip=this.newIp.trim()
+    if(n&&ip){ this.act(null,'/sethost?n='+enc(n)+'&ip='+enc(ip),'Name added'); this.newHost=''; this.newIp='' }
+  },
+  removeHost(e){ this.act(null,'/delhost?n='+enc(e.n),'Removed','/sethost?n='+enc(e.n)+'&ip='+enc(e.ip||'')) },
+  saveProxy(){ this.act(null,'/setproxy?p='+enc(this.cfg.pxy.trim()),'Proxy saved') },
+  saveSyslog(){ this.act(null,'/setsyslog?h='+enc(this.cfg.shost.trim())+'&p='+(parseInt(this.cfg.sport)||514),'Syslog saved') },
+  saveDns(){
+    const v=this.cfg.dnsservers.split(/[\s,;]+/).filter(Boolean).join(',')
+    if(!v){ this.toast('Add at least one DNS server',1); return }
+    this.dnsSaveMsg='saving…'
+    fetch('/setdns?d='+enc(v),{headers:CSRF_HDRS})
+      .then(r=>{ this.dnsSaveMsg=r.ok?'saved':'error '+r.status; if(r.ok) load() })
+      .catch(()=>{ this.dnsSaveMsg='save failed' })
+  },
+  rememberUrl(){ localStorage.setItem('blUrl', this.blUrl.trim()); this.blUrlSaved=true },
+
+  async copyIP(){
+    const t=(this.s&&this.s.ip)||'', ok=()=>this.toast('IP copied')
+    if(navigator.clipboard&&window.isSecureContext){ navigator.clipboard.writeText(t).then(ok,()=>this.copyFallback(t)) ; return }
+    this.copyFallback(t)
+  },
+  copyFallback(t){
+    const a=document.createElement('textarea'); a.value=t; a.setAttribute('readonly',''); a.style.position='fixed'; a.style.opacity='0'
+    document.body.appendChild(a); a.select()
+    try{ document.execCommand('copy') ? this.toast('IP copied') : this.toast('Copy failed',1) }catch(_){ this.toast('Copy failed',1) }
+    a.remove()
+  },
+  testDns(btn){
+    if(btn) btn.disabled=true
+    this.dnsCls='note'; this.dnsMsg='testing…'
+    const n='t'+Math.random().toString(36).slice(2,10)+'.dnscheck'   // random subdomain defeats caches
+    const ctl=new AbortController(), to=setTimeout(()=>ctl.abort(),4000)
+    fetch('http://'+n+'/__dnscheck',{mode:'no-cors',cache:'no-store',signal:ctl.signal})
+      .then(()=>{ this.dnsCls='note ok'; this.dnsMsg='✓ this device is using this DNS' })
+      .catch(()=>{ this.dnsCls='note bad'; this.dnsMsg='✗ not using this DNS (or secure-DNS/DoH is on)' })
+      .finally(()=>{ clearTimeout(to); if(btn) btn.disabled=false })
+  },
+
+  // --- advanced panel ------------------------------------------------------
+  openAdv(){
+    advOpener=document.activeElement
+    this.fillCfg(); this.adv=true
+    setTimeout(()=>{ const b=document.querySelector('.modalbox'); if(b) b.focus() },0)
+  },
+  closeAdv(){ this.adv=false; this.wifiEdit(false); if(advOpener&&advOpener.focus) advOpener.focus() },
+  fillCfg(){
+    const s=this.s; if(!s) return
+    this.cfg={
+      bmode: s.bmode===2?'nxdomain':s.bmode===1?'zero':'ip',
+      v4only: !!s.v4only, kw: !!s.kw, rb: !!s.rb, ss: !!s.ss,
+      pl: s.pl||0, shost: s.syslog||'', sport: s.sysport||514,
+      pxy: s.proxy||'', dnsservers: (s.dnslist||[]).map(d=>d.ip).join('\n')
+    }
+  },
+  async saveRulesFile(){
+    this.rulesMsg='saving…'
+    try{
+      const r=await fetch('/rules',{method:'POST',headers:{'X-Requested-With':'esp-adblock','Content-Type':'text/plain'},body:this.rules})
+      this.rulesMsg=r.ok?'saved':'error '+r.status; if(r.ok) load()
+    }catch(_){ this.rulesMsg='save failed' }
+  },
+  async fetchUpload(btn){
+    const u=this.blUrl.trim(); if(!u){ this.toast('Paste the blocklist URL first',1); return }
+    localStorage.setItem('blUrl',u); this.blUrlSaved=true
+    if(btn) btn.disabled=true
+    this.upMsg='Downloading (browser)…'
+    try{
+      const r=await fetch(u,{cache:'no-store'}); if(!r.ok) throw new Error('HTTP '+r.status)
+      const blob=await r.blob(); if(!blob.size) throw new Error('empty')
+      this.upMsg='Uploading '+(blob.size/1048576).toFixed(2)+' MB…'
+      const fd=new FormData(); fd.append('f',blob,'blocklist.bin')
+      const up=await fetch('/upload',{method:'POST',headers:CSRF_HDRS,body:fd})
+      this.upMsg=up.ok?'✓ Updated':('✗ '+await up.text())
+      if(up.ok){ this.toast('Blocklist updated'); setTimeout(load,600) }
+    }catch(err){
+      this.upMsg='✗ Browser fetch blocked ('+((err&&err.message)||'CORS/network')+'). Open the URL in a tab and drop the .bin in Upload above.'
+    }finally{ if(btn) btn.disabled=false }
+  },
+  async uploadBlocklist(ev){
+    const f=ev.target.querySelector('input[type=file]').files[0]; if(!f) return
+    const btn=ev.target.querySelector('button'); btn.disabled=true
+    this.upMsg='Uploading '+(f.size/1048576).toFixed(2)+' MB…'
+    const fd=new FormData(); fd.append('f',f)
+    try{
+      const r=await fetch('/upload',{method:'POST',headers:CSRF_HDRS,body:fd})
+      this.upMsg=r.ok?'✓ Updated':'✗ '+await r.text()
+    }catch(_){ this.upMsg='✗ Upload failed' }
+    btn.disabled=false
+    ev.target.querySelector('input[type=file]').value=''
+    setTimeout(load,600)
+  },
+  async uploadFirmware(ev){
+    const f=ev.target.querySelector('input[type=file]').files[0]; if(!f) return
+    if(prompt('Type FLASH to replace the firmware with "'+f.name+'". A wrong file can brick the device.')!=='FLASH') return
+    const btn=ev.target.querySelector('button'); btn.disabled=true
+    this.fwMsg='Flashing '+(f.size/1048576).toFixed(2)+' MB…'
+    const fd=new FormData(); fd.append('f',f)
+    try{
+      const r=await fetch('/update',{method:'POST',headers:CSRF_HDRS,body:fd})
+      this.fwMsg=r.ok?'✓ Rebooting, reconnect in ~15s':'✗ '+await r.text()
+    }catch(_){ this.fwMsg='✓ Rebooting, reconnect in ~15s' }
+    btn.disabled=false
+  },
+  resetStats(btn){
+    if(confirm('Reset all counters, per-client counts and the recent-blocked list?')) this.act(btn,'/resetstats','Counters reset')
+  },
+
+  // --- wifi ----------------------------------------------------------------
+  wifiEdit(on){ this.wifiEd=on; if(on){ if(!this.nets.length) this.wifiMsg='Scanning…'; this.wifiScan(null) } else this.wpass='' },
+  wifiScan(btn){
+    if(btn) btn.disabled=true
+    const prev=this.selNet||''
+    this.wifiMsg='Scanning…'
+    const ctl=new AbortController(), to=setTimeout(()=>ctl.abort(),25000)
+    fetch('/scan',{headers:CSRF_HDRS,signal:ctl.signal})
+      .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json() })
+      .then(d=>{
+        if(!Array.isArray(d)) throw new Error('bad response')
+        const seen=new Set(); this.nets=d.filter(n=>!seen.has(n.s)&&seen.add(n.s))
+        if(!this.nets.length) this.wifiMsg='No networks found.'
+        else { this.wifiMsg=''; if(prev && this.nets.some(n=>n.s===prev)) this.selNet=prev }
+      })
+      .catch(err=>{ this.wifiMsg='Scan failed ('+(err&&err.name==='AbortError'?'timeout':(err&&err.message)||'error')+'). Try again.' })
+      .finally(()=>{ clearTimeout(to); if(btn) btn.disabled=false })
+  },
+  saveWifi(btn){
+    if(!this.selNet){ this.toast('Press Scan and pick a network',1); return }
+    if(btn) btn.disabled=true
+    this.toast('Testing the new network…')
+    fetch('/setwifi?ssid='+enc(this.selNet)+'&pass='+enc(this.wpass),{headers:CSRF_HDRS})
+      .then(r=>r.text()).then(t=>{ this.toast(t,!t.startsWith('Joined')); this.wifiEdit(false); load() })
+      .catch(()=>this.toast('Network error',1))
+      .finally(()=>{ if(btn) btn.disabled=false })
   }
-
-  const eb=document.querySelector('#evt tbody'); eb.replaceChildren()
-  { const q=EQ.val.toLowerCase(); let a=EV.val; if(q)a=a.filter(e=>e.host.includes(q))
-    evn.textContent=EV.val.length?'('+EV.val.length+')':''
-    if(a.length) van.add(eb,...a.slice(0,50).map(e=>tr(td(div({class:'host'},e.host)),td({class:'mono'},e.cip||''),td(MUTED,new Date(e.at).toLocaleTimeString()),td({style:'text-align:right'},button({class:'alw btnico','data-h':e.host,'aria-label':'Allow '+e.host},ic('check'),'allow')))))
-    else van.add(eb,empty(4,q?'No match':'Nothing blocked yet. Blocked sites show up here.')) }
-
-  const cb=document.querySelector('#ct tbody')
-  const editNm=document.activeElement&&document.activeElement.classList&&document.activeElement.classList.contains('nm')
-  if(!editNm){ cb.replaceChildren()
-  if(s){ const {key,dir}=CS.val, q=CQ.val.toLowerCase(); let cl=s.clients.slice()
-    cl.sort((x,y)=>((key==='ip'||key==='mac')?x[key].localeCompare(y[key]):(x[key]-y[key]))*dir)
-    if(q)cl=cl.filter(c=>c.ip.includes(q)||c.mac.includes(q)||(c.name||'').toLowerCase().includes(q))
-    if(cl.length) van.add(cb,...cl.map(c=>tr(
-      td(c.ip),
-      td(input({class:'nm','data-ip':c.ip,'data-orig':c.name||'',value:c.name||'',placeholder:'name…',size:10,autocomplete:'off','aria-label':'Name for '+c.ip})),
-      td(c.mac),
-      td({class:'a'},fmt(c.blocked)),
-      td(MUTED,fmt(c.allowed)),
-      td({style:'text-align:right'}, c.ps>0 ? button({class:'csresume btnico','data-ip':c.ip},'resume ('+Math.floor(c.ps/60)+'m)') : button({class:'cspause btnico','data-ip':c.ip},'pause 1h')))))
-    else van.add(cb,empty(6,q?'No match':'No devices yet. They appear once a device uses this DNS.')) } }
-  document.getElementById('cs-ip').textContent=arrow(CS.val,'ip')
-  document.getElementById('cs-mac').textContent=arrow(CS.val,'mac')
-  document.getElementById('cs-blocked').textContent=arrow(CS.val,'blocked')
-  document.getElementById('cs-allowed').textContent=arrow(CS.val,'allowed')
-
-  const lb=document.querySelector('#cl tbody'); lb.replaceChildren()
-  if(s){ if((s.custom||[]).length) van.add(lb,...s.custom.map(d=>tr(td(div({class:'host'},d)),td({style:'text-align:right'},button({class:'rmbtn btnico','data-d':d},ic('trash-2'),'remove'))))); else van.add(lb,empty(2,'No always-blocked sites yet.')) }
-  const nb=document.querySelector('#ht tbody'); nb.replaceChildren()
-  if(s){ if((s.hosts||[]).length) van.add(nb,...s.hosts.map(e=>tr(td(e.n),td(e.ip),td({style:'text-align:right'},button({class:'hrm btnico','data-n':e.n,'data-ip':e.ip},ic('trash-2'),'remove'))))); else van.add(nb,empty(3,'No local names yet.')) }
-  const wb=document.querySelector('#wl tbody'); wb.replaceChildren()
-  if(s){ if((s.wild||[]).length) van.add(wb,...s.wild.map(d=>tr(td({class:'mono'},d),td({style:'text-align:right'},button({class:'rmwild btnico','data-d':d},ic('trash-2'),'remove'))))); else van.add(wb,empty(2,'No wildcard rules yet.')) }
-  LU()
 }
 
-cfilter.oninput=e=>{CQ.val=e.currentTarget.value;render()}
-efilter.oninput=e=>{EQ.val=e.currentTarget.value;render()}
+// Alpine's CSP build (web/alpine.min.js) evaluates directives without eval/Function, so the
+// firmware can keep script-src free of 'unsafe-eval'. It resolves x-data only through the
+// component registry — hence the body uses x-data="dashboard".
+document.addEventListener('alpine:init', () => Alpine.data('dashboard', () => state))
 
+function fmt(n){ return (n|0).toLocaleString() }
+function fmtc(n){ n=n|0; if(n<1000) return String(n); const u=['','k','M','B','T']; let i=0,x=n; while(x>=1000&&i<4){ x/=1000;i++ } return (x>=100?Math.round(x):x.toFixed(1).replace(/\.0$/,''))+u[i] }
+
+// A 401 from fetch() never opens the browser's auth dialog (only a navigation does), so on
+// 401 reload once: the navigation then prompts, and the browser caches the credentials.
+// auth401 makes the "login required" hint survive that reload (and a flaky one).
+function unauth(){ if(!sessionStorage.getItem('authRL')){ sessionStorage.setItem('authRL','1'); location.reload(); return true } return false }
+function showOffline(){
+  lastErr=true
+  state.conn = lastOk ? 'offline' : 'connecting'
+  const login=sessionStorage.getItem('auth401')
+  if(boot) boot.innerHTML = login
+    ? '<span class=spinner></span>Login required — <button onclick="location.reload()">Reload</button> and enter the dashboard password.'
+    : '<span class=spinner></span>Can not reach the device. Press Refresh.'
+  if(loadbar) loadbar.classList.remove('on')
+}
 async function load(){
-  let s; try{ s=await(await fetch('/stats.json')).json() }catch(_){ lastErr=true; if(boot)boot.innerHTML='<span class=spinner></span>Can not reach the device. Press Refresh.'; const l=document.getElementById('loadbar'); if(l)l.classList.remove('on'); return }
-  lastOk=Date.now(); lastErr=false
+  let s
+  try{
+    const r=await fetch('/stats.json')
+    if(r.status===401){ sessionStorage.setItem('auth401','1'); if(unauth())return; showOffline(); return }
+    if(!r.ok)throw new Error('HTTP '+r.status)
+    s=await r.json(); sessionStorage.removeItem('authRL'); sessionStorage.removeItem('auth401')
+  }catch(_){ showOffline(); return }
+  lastOk=Date.now(); lastErr=false; state.conn='online'
   if(bootSeen==null)bootSeen=s.boot; else if(s.boot!=null&&s.boot!==bootSeen){location.reload();return}   // device rebooted -> refresh this open page
-  if(s.ev&&s.ev.length){ let a=EV.val.slice(); for(const e of s.ev){ if(e.seq>evLast){ evLast=e.seq; a.unshift({host:e.host,cip:e.cip,at:Date.now()}) } } if(a.length>200)a.length=200; EV.val=a }
-  S.val=s
-  try{ render() }catch(e){ console.error('render',e); sum.textContent='Render error: '+e.message; if(boot)boot.classList.add('off'); return }
-  if(boot)boot.classList.add('off')
-  const lbl=document.getElementById('loadbar'); if(lbl)lbl.classList.remove('on')
-  host.textContent='@ '+s.ip; dnsip.textContent=s.ip; if(s.ver)ver.textContent='v'+s.ver
-  credwarn.style.display=s.defcreds?'block':'none'
-  updnudge.hidden = !(localStorage.getItem('blUrl') && !s.upat && !updDismissed)   // suggest an update; never auto-fetch
-  let on=s.blocking!==false; blockstate.dataset.on=on?'1':'0'
-  blockdot.replaceChildren(ic(on?'shield-check':'pause'))
-  pauseEnd=(!on&&s.resumeIn>0)?Date.now()+s.resumeIn*1000:0
-  blockstate.textContent=on?'Blocking active':(pauseEnd?'Paused…':'Paused')
-  pausebtn.replaceChildren(ic(on?'pause':'play'),document.createTextNode(on?'Pause':'Resume')); pausedurwrap.style.display=on?'':'none'
-  ustat.textContent = s.upat ? (Math.floor(s.upat/60)+'m ago') : 'not since boot'
-  curssid.textContent=s.ssid||'—'
-  dnsnow.textContent=(s.dnslist||[]).map(d=>d.ip+' — '+(d.ms<0?'timeout':d.ms?d.ms+' ms':'probing…')+(d.cur?' (in use)':'')).join('   ')
-  if(!rulesInit){rulesInit=1;loadRulesFile()}    // pre-fill the /rules.cfg editor once
+  if(s.ev&&s.ev.length){ let a=state.ev.slice(); for(const e of s.ev){ if(e.seq>evLast){ evLast=e.seq; a.unshift({seq:e.seq,host:e.host,gaf:e.gaf,cip:e.cip,mac:e.mac,name:e.name,at:Date.now()}) } } if(a.length>200)a.length=200; state.ev=a }
+  state.s=s
+  state.renderGeo()
+  state.pauseIn=(!s.blocking&&s.resumeIn>0)?s.resumeIn:0
+  if(!rulesInit){ rulesInit=1; loadRulesFile() }    // pre-fill the /rules.cfg editor once
+  if(boot) boot.classList.add('off')
+  if(loadbar) loadbar.classList.remove('on')
   LU()
 }
-function togglePause(e){const on=blockstate.dataset.on=='1';act(e.currentTarget,on?'/pause?s='+pausedur.value:'/resume',on?'Blocking paused':'Blocking resumed')}
-function addDom(e){let d=dom.value.trim();if(d){act(e.currentTarget,'/addblock?d='+encodeURIComponent(d),'Added to blocklist');dom.value=''}}
-function saveSyslog(e){act(e.currentTarget,'/setsyslog?h='+encodeURIComponent(shost.value.trim())+'&p='+(parseInt(sport.value)||514),'Syslog saved')}
-function saveProxy(e){act(e.currentTarget,'/setproxy?p='+encodeURIComponent(pxy.value.trim()),'Proxy saved')}
-function wifiEdit(on){wifiview.hidden=on;wifiform.hidden=!on;if(on){if(!wnet.options.length)wnet.innerHTML='<option value="">Scanning…</option>';wifiScan()}else wpass.value=''}
-function dismissNudge(){updDismissed=true;updnudge.hidden=true}
-function wifiScan(e){const b=e&&e.currentTarget;if(b)b.disabled=true;const prev=wnet.value||selNet||'';wnet.innerHTML='<option>Scanning…</option>';
-  const ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),25000);
-  fetch('/scan',{headers:CSRF_HDRS,signal:ctl.signal}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}).then(d=>{
-      if(!Array.isArray(d))throw new Error('bad response');
-      const seen=new Set();wnet.innerHTML='';
-      for(const n of d){if(seen.has(n.s))continue;seen.add(n.s);const o=document.createElement('option');o.value=n.s;o.textContent=n.s+(n.e?'':' (open)')+' · '+n.r+' dBm';wnet.appendChild(o)}
-      if(!wnet.options.length)wnet.innerHTML='<option value="">No networks found.</option>';
-      for(const o of wnet.options){if(o.value===prev){wnet.value=prev;break}}
-    }).catch(err=>{wnet.innerHTML='<option value="">Scan failed ('+(err&&err.name==='AbortError'?'timeout':(err&&err.message)||'error')+'). Try again.</option>'})
-    .finally(()=>{clearTimeout(to);if(b)b.disabled=false})}
-function saveWifi(e){const s=wnet.value;if(!s){toast('Press Scan and pick a network',1);return}const p=wpass.value;const b=e&&e.currentTarget;if(b)b.disabled=true;toast('Testing the new network…');
-  fetch('/setwifi?ssid='+encodeURIComponent(s)+'&pass='+encodeURIComponent(p),{headers:CSRF_HDRS}).then(r=>r.text()).then(t=>{toast(t,!t.startsWith('Joined'));wifiEdit(false);load()}).catch(()=>{toast('Network error',1)}).finally(()=>{if(b)b.disabled=false})}
-function saveDns(e){const v=dnsservers.value.split(/[\s,;]+/).filter(Boolean).join(',')
-  if(!v){toast('Add at least one DNS server',1);return}
-  act(e.currentTarget,'/setdns?d='+encodeURIComponent(v),'Upstream DNS saved')}
-function addHost(e){let n=hname.value.trim(),ip=hip.value.trim();if(n&&ip){act(e.currentTarget,'/sethost?n='+encodeURIComponent(n)+'&ip='+encodeURIComponent(ip),'Name added');hname.value='';hip.value=''}}
-bmode.onchange=()=>act(null,'/setblock?m='+bmode.value,'Saved')
-function saveV4(e){act(e.currentTarget,'/setblock?v4='+(v4only.checked?'1':'0'),'Saved')}
-function saveKw(e){act(e.currentTarget,'/setblock?kw='+(kw.checked?'1':'0'),'Saved')}
-function saveRb(e){act(e.currentTarget,'/setblock?rb='+(rb.checked?'1':'0'),'Saved')}
-function saveSs(e){act(e.currentTarget,'/setblock?ss='+(ss.checked?'1':'0'),'Saved')}
-function savePl(e){act(e.currentTarget,'/setblock?pl='+plsel.value,'Privacy level saved')}
-function addWild(e){let d=wild.value.trim();if(d){act(e.currentTarget,'/addblock?d='+encodeURIComponent(d),'Wildcard added');wild.value=''}}
-async function loadRulesFile(){rulesmsg.textContent='…';try{const r=await fetch('/rules',{headers:CSRF_HDRS});rules.value=await r.text();rulesmsg.textContent=''}catch(_){rulesmsg.textContent='load failed'}}
-async function saveRulesFile(){rulesmsg.textContent='saving…';try{const r=await fetch('/rules',{method:'POST',headers:{'X-Requested-With':'esp-adblock','Content-Type':'text/plain'},body:rules.value});rulesmsg.textContent=r.ok?'saved':'error '+r.status;if(r.ok)load()}catch(_){rulesmsg.textContent='save failed'}}
-ht.addEventListener('click',e=>{const b=e.target.closest('.hrm');if(b)act(b,'/delhost?n='+encodeURIComponent(b.dataset.n),'Removed','/sethost?n='+encodeURIComponent(b.dataset.n)+'&ip='+encodeURIComponent(b.dataset.ip||''))})
-evt.addEventListener('click',e=>{const b=e.target.closest('.alw');if(b)act(b,'/allow?d='+encodeURIComponent(b.dataset.h),'Allowed')})
-cl.addEventListener('click',e=>{const b=e.target.closest('.rmbtn');if(b)act(b,'/unblock?d='+encodeURIComponent(b.dataset.d),'Removed','/addblock?d='+encodeURIComponent(b.dataset.d))})
-ct.addEventListener('click',e=>{
-  const p=e.target.closest('.cspause'); if(p){act(p,'/pauseclient?ip='+encodeURIComponent(p.dataset.ip)+'&s=3600','Paused for 1h'); return;}
-  const r=e.target.closest('.csresume'); if(r)act(r,'/pauseclient?ip='+encodeURIComponent(r.dataset.ip)+'&s=0','Resumed');
-})
-ct.addEventListener('keydown',e=>{ if(e.key==='Enter' && e.target.classList.contains('nm')) e.target.blur() })
-ct.addEventListener('focusout',e=>{ const i=e.target.closest('.nm'); if(i && i.value.trim()!==(i.dataset.orig||'')) act(null,'/setname?ip='+encodeURIComponent(i.dataset.ip)+'&n='+encodeURIComponent(i.value.trim()),'Name saved') })
-wl.addEventListener('click',e=>{const b=e.target.closest('.rmwild');if(b)act(b,'/unblock?d='+encodeURIComponent(b.dataset.d),'Removed','/addblock?d='+encodeURIComponent(b.dataset.d))})
-let advOpener=null
-function fillSettings(){const s=S.val;if(!s)return;
-  uurl.value=localStorage.getItem('blUrl')||''; bmode.value=s.bmode===2?'nxdomain':s.bmode===1?'zero':'ip';
-  v4only.checked=!!s.v4only; kw.checked=!!s.kw; rb.checked=!!s.rb; ss.checked=!!s.ss;
-  plsel.value=(s.pl||0); shost.value=s.syslog||''; pxy.value=s.proxy||''; sport.value=s.sysport||514;
-  dnsservers.value=(s.dnslist||[]).map(d=>d.ip).join('\n');
+async function loadRulesFile(){
+  state.rulesMsg='…'
+  try{ const r=await fetch('/rules',{headers:CSRF_HDRS}); state.rules=await r.text(); state.rulesMsg='' }
+  catch(_){ state.rulesMsg='load failed' }
 }
-function advOpen(){advOpener=document.activeElement;adv.hidden=false;fillSettings();try{lucide.createIcons()}catch(_){}const b=adv.querySelector('.modalbox');if(b)b.focus()}
-function advClose(){adv.hidden=true;wifiEdit(false);if(advOpener&&advOpener.focus)advOpener.focus()}
-adv.addEventListener('click',e=>{if(e.target===adv)advClose()})              // click on the backdrop closes
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!adv.hidden)advClose()})
-// Browser-side download (browser does TLS) + POST to the existing /upload. Needs CORS on the URL.
-async function fetchUpload(e){const u=uurl.value.trim();if(!u){toast('Paste the blocklist URL first',1);return}
-  localStorage.setItem('blUrl',u);
-  const b=e&&e.currentTarget;if(b)b.disabled=true;upmsg.textContent='Downloading (browser)…';
-  try{const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);
-    const blob=await r.blob();if(!blob.size)throw new Error('empty');
-    upmsg.textContent='Uploading '+(blob.size/1048576).toFixed(2)+' MB…';
-    const fd=new FormData();fd.append('f',blob,'blocklist.bin');
-    const up=await fetch('/upload',{method:'POST',headers:CSRF_HDRS,body:fd});
-    upmsg.textContent=up.ok?'✓ Updated':('✗ '+await up.text());
-    if(up.ok){toast('Blocklist updated');setTimeout(load,600)}
-  }catch(err){upmsg.textContent='✗ Browser fetch blocked ('+((err&&err.message)||'CORS/network')+'). Open the URL in a tab and drop the .bin in Upload above.'}
-  finally{if(b)b.disabled=false}}
-function resetStats(e){if(confirm('Reset all counters, per-client counts and the recent-blocked list?'))act(e.currentTarget,'/resetstats','Counters reset')}
-fwf.onsubmit=async e=>{e.preventDefault();let f=fwb.files[0];if(!f)return;if(prompt('Type FLASH to replace the firmware with "'+f.name+'". A wrong file can brick the device.')!=='FLASH')return;const b=fwf.querySelector('button');b.disabled=true;fwmsg.textContent='Flashing '+(f.size/1048576).toFixed(2)+' MB…';
-  let fd=new FormData();fd.append('f',f);
-  try{let r=await fetch('/update',{method:'POST',headers:CSRF_HDRS,body:fd});fwmsg.textContent=r.ok?'✓ Rebooting, reconnect in ~15s':'✗ '+await r.text()}catch(_){fwmsg.textContent='✓ Rebooting, reconnect in ~15s'}b.disabled=false}
-upf.onsubmit=async e=>{e.preventDefault();let f=blf.files[0];if(!f)return;const b=upf.querySelector('button');b.disabled=true;upmsg.textContent='Uploading '+(f.size/1048576).toFixed(2)+' MB…';
-  let fd=new FormData();fd.append('f',f);
-  try{let r=await fetch('/upload',{method:'POST',headers:CSRF_HDRS,body:fd});upmsg.textContent=r.ok?'✓ Updated':'✗ '+await r.text()}catch(_){upmsg.textContent='✗ Upload failed'}b.disabled=false
-  blf.value='';setTimeout(load,600)}
 
-setInterval(()=>{
-  conn.textContent=!lastOk?'connecting…':(lastErr?'offline':'online')
-  conn.className='badge '+(lastOk?(lastErr?'off':'on'):'')
-  if(pauseEnd>0){const r=Math.max(0,Math.ceil((pauseEnd-Date.now())/1000));if(r>0)blockstate.textContent='Paused — resumes in '+r+'s';else pauseEnd=0}
-},1000)
-load();
-setTimeout(()=>{const b=document.getElementById('boot');if(b)b.classList.add('off')},8000);   // safety: never hang on loading
-</script></body></html>
+// Icons created by Alpine's x-for (rows, toasts) are not in the initial markup.
+new MutationObserver(()=>{ if(document.querySelector('i[data-lucide]')) LU() }).observe(document.body,{childList:true,subtree:true})
+
+setInterval(()=>{ if(state.pauseIn>0) state.pauseIn=Math.max(0,state.pauseIn-1) },1000)
+
+// Always-on auto-refresh: ~5s while healthy, backing off to 30s when offline or the
+// tab is hidden (an idle dashboard must not hammer the tiny device).
+let autoBack=5000
+function autoTick(d){setTimeout(async()=>{
+  await load()
+  autoBack=lastErr?Math.min(autoBack+5000,30000):5000      // back off 5→30s while offline, keep retrying
+  autoTick(document.hidden?30000:(lastErr?autoBack:5000))
+},d)}
+
+// If Alpine never starts (missing/corrupt vendor file), say so instead of hanging on "Loading…".
+setTimeout(()=>{ if(!started && boot){
+  boot.innerHTML = !window.Alpine
+    ? 'UI library failed to load. Rebuild with web/alpine.min.js present (see docs/ui-hosting.md).'
+    : 'Dashboard UI failed to start. Open the browser console and check for errors.'
+  boot.classList.remove('off')
+} },2500)
+setTimeout(()=>{ const b=document.getElementById('boot'); if(b) b.classList.add('off') },8000);   // safety: never hang on loading
+</script>
+<script src="https://unpkg.com/@alpinejs/csp@3.17.4/dist/cdn.min.js" integrity="sha384-DQd2BgbtOQrdt/JbxcM+wSb8poOHwsG5W2jbbXskj85r7SWPwqpBFgGGR1devM/D" crossorigin="anonymous"></script>
+</body></html>

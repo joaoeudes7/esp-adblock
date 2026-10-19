@@ -12,31 +12,85 @@ concurrency:
 
 jobs:
   firmware:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        env: [esp8266, c3, esp32dev, esp32s3]
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
-      - run: pip install -U platformio
-      # extra_scripts (tools/gen_config.py) seeds src/secrets.h from config.env.example
-      # when there is no config.env, so no manual secrets step is needed.
-      - run: pio run -e ${{ matrix.env }}
+      # intelhex is imported by the bundled tool-esptoolpy but is no longer a
+      # PlatformIO dependency; the ESP32 targets fail without it.
+      - run: pip install -U platformio intelhex
+      # All envs on one runner. Prefetch packages once (avoids concurrent
+      # installs on a cold cache), then build each env in its own git
+      # worktree so the generated src/secrets.h, src/page.h and .pio dirs
+      # don't race. Keep all results, fail the job if any env failed.
+      - name: Prefetch PlatformIO packages
+        run: |
+          for env in esp8266 c3 esp32dev esp32s3; do
+            pio pkg install -e "$env"
+          done
+      - name: Build all firmware envs (parallel)
+        run: |
+          set -u
+          envs="esp8266 c3 esp32dev esp32s3"
+          tmp="${RUNNER_TEMP:-/tmp}"
+          for env in $envs; do
+            git worktree add --detach "../fw-$env" HEAD
+          done
+          for env in $envs; do
+            ( cd "../fw-$env" && pio run -e "$env" ) > "$tmp/fw-$env.log" 2>&1 &
+            echo $! > "$tmp/fw-$env.pid"
+          done
+          status=0
+          for env in $envs; do
+            if wait "$(cat "$tmp/fw-$env.pid")"; then
+              echo "::group::$env SUCCESS"
+            else
+              echo "::group::$env FAILED"
+              status=1
+            fi
+            cat "$tmp/fw-$env.log"
+            echo "::endgroup::"
+          done
+          exit $status
+      # The parallel build above runs in ../fw-<env> worktrees. Publish what CI compiled so
+      # a run can be downloaded/flashed without rebuilding (the web installer under
+      # installer/fw is a separate, versioned release artifact).
+      - name: Upload firmware artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          if-no-files-found: warn
+          path: |
+            ../fw-esp8266/.pio/build/esp8266/firmware.bin
+            ../fw-c3/.pio/build/c3/firmware.bin
+            ../fw-esp32dev/.pio/build/esp32dev/firmware.bin
+            ../fw-esp32s3/.pio/build/esp32s3/firmware.bin
 
   blocklist-tool:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: build_bloom.py format + membership tests
+      - name: build_bin_list_block.py format + membership tests
         run: python3 -m unittest discover -s tools -p 'test_*.py' -v
+      - name: hostname-regex engine tests (C++)
+        run: |
+          g++ -O1 -I src -o /tmp/test_host_regex tools/test_host_regex.cpp && /tmp/test_host_regex
+          g++ -O1 -I src -o /tmp/test_dns_pick tools/test_dns_pick.cpp && /tmp/test_dns_pick
+          g++ -O1 -I src -o /tmp/test_resp_cache tools/test_resp_cache.cpp && /tmp/test_resp_cache
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: dashboard auth/offline messaging (node)
+        run: node tools/test_dashboard_auth.mjs
+      - name: dashboard derived state (node)
+        run: node tools/test_dashboard_state.mjs

@@ -42,7 +42,7 @@ Chromium-based desktop browser (Chrome/Edge/Opera) with Web Serial, or WebUSB fo
 bridge. Firefox, Safari and mobile lack both. Serve over HTTPS or `localhost`.
 
 esptool-js 0.7.0 is **vendored** at `vendor/esptool-js.js` (no CDN at runtime — same
-supply-chain stance as the inlined VanJS in the dashboard). To update: download
+supply-chain stance as the inlined Alpine in the dashboard). To update: download
 `bundle.js` from the npm release and replace that file.
 
 ## Manifest
@@ -61,5 +61,5 @@ CFG ssid <name>      CFG host <hostname>      CFG ip|gw|dns <address>      CFG c
 ```
 
 The device answers `CFGSAVED` (text) or the Improv state/result packets. Both paths write
-`/wifi.cfg`, preserving unrelated keys (`UPDATE_URL`, …). See the serial-provisioning section
+`/wifi.cfg`, preserving unrelated keys (`UPSTREAM_DNS`, …). See the serial-provisioning section
 of `src/main.cpp`.

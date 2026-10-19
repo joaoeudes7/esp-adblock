@@ -1,10 +1,11 @@
 name: blocklist
 
 # Rebuilds the default blocklist weekly and publishes it at a stable URL:
-#   https://github.com/<owner>/<repo>/releases/download/blocklist/blocklist.bin   (device, http only on ESP8266)
+#   https://github.com/<owner>/<repo>/releases/download/blocklist/blocklist.bin   (release asset)
 #   https://raw.githubusercontent.com/<owner>/<repo>/blocklist/blocklist.bin      (CORS: browser download)
-# Set that as the device's Remote auto-update URL (config.env UPDATE_URL, or the
-# dashboard's /setupdate). The blob is the BLM1 bloom format this fork reads.
+# Paste the CORS one into the dashboard's "Download & upload" — the BROWSER fetches it
+# (HTTPS) and POSTs to the device's /upload; the firmware itself never does TLS.
+# The blob is the BLM1/BLM2 bloom format this fork reads.
 on:
   schedule:
     - cron: "17 4 * * 1"   # Mondays 04:17 UTC
@@ -19,34 +20,37 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Build default blocklist (fails if any source is unreachable)
         run: |
           set -o pipefail
-          python3 tools/build_bloom.py blocklist.bin 2>&1 | tee build.log
-      - name: Sanity checks (BLM1)
+          python3 tools/build_bin_list_block.py blocklist.bin 2>&1 | tee build.log
+      - name: Sanity checks (BLM1/BLM2)
         run: |
           size=$(stat -c%s blocklist.bin)
           magic=$(head -c4 blocklist.bin)
           n=$(python3 -c "import struct;print(struct.unpack('<I',open('blocklist.bin','rb').read(8)[4:8])[0])")
           echo "size=$size magic=$magic domains=$n"
-          test "$magic" = "BLM1"
+          case "$magic" in BLM1|BLM2) ;; *) echo "not a BLM1/BLM2 blob"; exit 1;; esac
           test "$n" -gt 40000                 # catches a silently shrunk list
-          test "$size" -lt 1400000            # fits the 2 MB filesystem partition
+          # Cap at the SMALLEST target: the ESP32 spiffs partition is 0x150000 = 1,376,256 B
+          # (minus LittleFS overhead), so a bigger blob would publish but never flash.
+          test "$size" -lt 1300000
       - name: Publish to the 'blocklist' release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           n=$(python3 -c "import struct;print(struct.unpack('<I',open('blocklist.bin','rb').read(8)[4:8])[0])")
-          notes="Auto-built $(date -u +%F) — ${n} domains (BLM1 bloom; default multi-source: StevenBlack + Hagezi Pro.plus + OISD Big + Hagezi DoH/DoT + Hagezi TIF.mini + Turtlecute).
+          notes="Auto-built $(date -u +%F) — ${n} domains (BLM1/BLM2 bloom; default multi-source: StevenBlack + Hagezi Pro.plus + OISD Big + Hagezi DoH/DoT + Hagezi TIF.mini + Turtlecute).
 
-          Set this as the device's Remote auto-update URL:
-          https://github.com/${{ github.repository }}/releases/download/blocklist/blocklist.bin"
+          Paste this into the dashboard's 'Download & upload' (your browser fetches it over HTTPS
+          and POSTs it to the device's /upload):
+          https://raw.githubusercontent.com/${{ github.repository }}/blocklist/blocklist.bin"
           if gh release view blocklist >/dev/null 2>&1; then
             gh release edit blocklist --notes "$notes"
           else
@@ -60,6 +64,8 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout --orphan blocklist-publish
+          git rm -rf --cached . >/dev/null   # the orphan checkout keeps the index: without this
+                                             # the commit would publish the whole repo
           git add -f blocklist.bin
           git commit -m "blocklist: $(date -u +%F)" || { echo "no change"; exit 0; }
           git push --force origin blocklist-publish:blocklist

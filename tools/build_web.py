@@ -3,7 +3,8 @@
 
 Keeps the HTML as real .html files (editable, syntax-highlighted) while still
 embedding them in the firmware. A conservative minifier shrinks them (CSS/HTML
-aggressive; JS safe — no strings/ASI broken).
+aggressive; JS safe — no strings/ASI broken). The Alpine `<script src>` is left
+as-is: the browser loads it from unpkg and caches it.
 
   web/index.html  -> const char PAGE[]       (dashboard)
   web/blocked.html-> const char BLOCK_TMPL[] (block page; {{HOST}}/{{REASON}} tokens)
@@ -72,7 +73,9 @@ def min_html(html: str) -> str:
 
 def read(name):
     p = os.path.join(WEB, name)
-    return open(p, encoding="utf-8").read() if os.path.exists(p) else ""
+    if not os.path.exists(p):
+        raise SystemExit(f"[build_web] missing required source: web/{name}")
+    return open(p, encoding="utf-8").read()
 
 
 def emit(var, delim, text):
@@ -82,21 +85,15 @@ def emit(var, delim, text):
 def main():
     idx = read("index.html")
     blk = read("blocked.html")
+    world = read("world.svg")
     if MINIFY:
         idx, blk = min_html(idx), min_html(blk)
-    # Inline the vendored VanJS (web/van.min.js) so the UI works offline. If the file is
-    # absent, the CDN <script src> in index.html is left as-is (requires internet).
-    van = read("van.min.js")
-    if van:
-        before = idx
-        idx = re.sub(r'<script[^>]*src="[^"]*van[^"]*"[^>]*></script>', lambda m: "<script>" + van + "</script>", idx)
-        if idx == before:
-            print("[build_web] WARN: van.min.js present but no CDN <script src=...van...> found to inline")
     with open(OUT, "w", encoding="utf-8") as f:
-        f.write("#pragma once\n// GENERATED from web/*.html by tools/build_web.py — do not edit.\n\n")
+        f.write("#pragma once\n// GENERATED from web/*.html + web/world.svg by tools/build_web.py — do not edit.\n\n")
         f.write(emit("PAGE", "PAGEHTML", idx))
         f.write(emit("BLOCK_TMPL", "BLKHTML", blk))
-    print("[build_web] src/page.h: index=%dB blocked=%dB (minify=%s, vanjs=%s)" % (len(idx), len(blk), MINIFY, "inline" if van else "cdn"))
+        f.write(emit("WORLD_SVG", "SVGWORLD", world))
+    print("[build_web] src/page.h: index=%dB blocked=%dB world=%dB (minify=%s)" % (len(idx), len(blk), len(world), MINIFY))
 
 
 main()

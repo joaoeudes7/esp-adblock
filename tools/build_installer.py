@@ -81,8 +81,8 @@ def part_source(env, name):
     return os.path.join(BUILD, env, name)
 
 
-def partition_offsets():
-    """name -> offset parsed from partitions.csv (ESP32 layouts), or {} if absent."""
+def partition_table():
+    """name -> (offset, size) parsed from partitions.csv (ESP32 layouts), or {} if absent."""
     csv = os.path.join(ROOT, "partitions.csv")
     out = {}
     if not os.path.exists(csv):
@@ -93,10 +93,10 @@ def partition_offsets():
             if not line or line.startswith("#") or "," not in line:
                 continue
             cols = [c.strip() for c in line.split(",")]
-            if len(cols) < 4 or not cols[3].lower().startswith("0x"):
+            if len(cols) < 5 or not cols[3].lower().startswith("0x"):
                 continue
             try:
-                out[cols[0]] = int(cols[3], 16)
+                out[cols[0]] = (int(cols[3], 16), int(cols[4], 16))
             except ValueError:
                 continue
     return out
@@ -139,7 +139,7 @@ def main():
     shutil.rmtree(fwdir, ignore_errors=True)
     os.makedirs(fwdir, exist_ok=True)
 
-    parts_csv = partition_offsets()
+    parts_csv = partition_table()
 
     manifest = {
         "name": "ESP AdBlock",
@@ -169,14 +169,20 @@ def main():
             if not any(p["file"].endswith("boot_app0.bin") for p in parts):
                 print("[installer] %-8s WARN: boot_app0.bin not found — the device boots via the "
                       "blank-otadata fallback" % env)
-            # Guard against drift: offsets must match the partition table the firmware was built with.
+            # Guard against drift: offsets must match the partition table, and each image
+            # must fit its partition (a too-large image would be published silently).
             for p in parts:
                 name = os.path.basename(p["file"])[len(env) + 1:]
                 key = CSV_PART.get(name)
-                if key and key in parts_csv and p["offset"] != parts_csv[key]:
-                    raise SystemExit("[installer] %s/%s offset 0x%06x != partitions.csv %s=0x%06x — "
-                                     "update BOARDS in tools/build_installer.py"
-                                     % (env, name, p["offset"], key, parts_csv[key]))
+                if key and key in parts_csv:
+                    off, size = parts_csv[key]
+                    if p["offset"] != off:
+                        raise SystemExit("[installer] %s/%s offset 0x%06x != partitions.csv %s=0x%06x — "
+                                         "update BOARDS in tools/build_installer.py"
+                                         % (env, name, p["offset"], key, off))
+                    if p["size"] > size:
+                        raise SystemExit("[installer] %s/%s is %d B but partition %s holds only %d B"
+                                         % (env, name, p["size"], key, size))
         manifest["boards"][env] = {
             "label": meta["label"],
             "chipFamily": meta["chipFamily"],
@@ -200,9 +206,11 @@ def main():
 
     manifest["default"] = "esp8266" if "esp8266" in manifest["boards"] else next(iter(manifest["boards"]))
     path = os.path.join(out, "manifest.json")
-    with open(path, "w", encoding="utf-8") as f:
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:   # atomic: never publish a half-written manifest
         json.dump(manifest, f, indent=1)
         f.write("\n")
+    os.replace(tmp, path)
     print("[installer] wrote %s (%d boards, %s)" % (path, len(manifest["boards"]), manifest["version"]))
     print("[installer] serve it: python3 -m http.server -d installer 8000  ->  http://localhost:8000/")
 

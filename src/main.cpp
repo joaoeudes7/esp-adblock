@@ -71,6 +71,9 @@ private:
 #include <Update.h>      // firmware OTA
 #include <ArduinoOTA.h>  // network firmware flashing (pio run over wifi)
 #include <Preferences.h> // NVS store for provisioned WiFi creds
+#if !defined(ESP8266)
+#include <esp_ota_ops.h> // rollback confirm (ESP32 bootloader has it enabled)
+#endif
 
 #define WEBSERVER_TYPE WebServer
 static inline uint32_t rnd32() { return esp_random(); }
@@ -83,10 +86,12 @@ static inline uint32_t rnd32() { return esp_random(); }
 ADC_MODE(ADC_VCC); // route the ADC to read the chip supply (brownout diagnosis)
 #endif
 
+#include "geo_table.h" // /14 IPv4 -> country byte (tools/build_geo_table.py)
+
 // Firmware version — shown on the dashboard + /stats.json.
 // Override at build time with: build_flags = -D FW_VERSION='"1.2.3"'
 #ifndef FW_VERSION
-#define FW_VERSION "1.2.0"
+#define FW_VERSION "1.3.0"
 #endif
 
 static inline uint32_t chipVcc() { // supply voltage in mV (0 = unsupported)
@@ -136,6 +141,7 @@ static uint32_t ledUntil = 0; // millis() until which the LED stays lit (0 = off
 #endif
 #include "dns_pick.h"
 #include "resp_cache.h"
+#include "host_regex.h"
 static const int MAX_DNS = 4;                        // upstream candidates (see /dns.cfg)
 static const uint32_t DNS_PROBE_INTERVAL_MS = 60000; // full latency sweep once a minute
 static const uint16_t DNS_PROBE_TIMEOUT_MS = 400;    // a resolver slower than this loses the round
@@ -146,6 +152,8 @@ static uint8_t dnsFails[MAX_DNS];                  // consecutive failed probes
 static int dnsCount = 0, dnsCur = 0, dnsNext = -1; // dnsNext = pending switch (applied when idle)
 static IPAddress upstreamIP(1, 1, 1, 1);           // active forwarder == dnsList[dnsCur]
 static const uint16_t DNS_PORT = 53;
+static const uint16_t BLACKHOLE_PORT = 81; // PAC-routed URL matches are dropped here
+static const uint32_t TTL_CLAMP_S = 300;   // rewrite answer TTL down to this (0 = off); fast policy changes
 static const char* BLOCKLIST_PATH = "/blocklist.bin";
 #if defined(ESP8266)
 static const int CACHE_SIZE = 64; // must be power of 2
@@ -154,6 +162,9 @@ static const int MAX_CUSTOM = 48;
 static const int MAX_ALLOW = 64;
 static const int RESP_CACHE_N = 32; // total entries, 2-way (must be power of 2)
 static const int RESP_MAX = 128;    // max cached reply size (A/AAAA + most CNAME chains; larger is forwarded uncached)
+static const int MAX_RGX = 16;      // hostname regex patterns loaded from the bin (BLM2)
+static const int RGX_MAXLEN = 96;   // max pattern length kept (longer records skipped)
+static const int MAX_URL = 24;      // PAC URL-block patterns (/rules.cfg "url <substr>")
 #else
 static const int CACHE_SIZE = 256; // must be power of 2
 static const int MAX_CLIENTS = 96;
@@ -161,6 +172,9 @@ static const int MAX_CUSTOM = 200;
 static const int MAX_ALLOW = 128;
 static const int RESP_CACHE_N = 64; // total entries, 2-way (must be power of 2)
 static const int RESP_MAX = 512;
+static const int MAX_RGX = 64;      // hostname regex patterns loaded from the bin (BLM2)
+static const int RGX_MAXLEN = 128;  // max pattern length kept (longer records skipped)
+static const int MAX_URL = 64;      // PAC URL-block patterns (/rules.cfg "url <substr>")
 #endif
 static const int INFLIGHT_N = 8;    // concurrent upstream queries
 static const int EV_N = 16;         // recent-blocked ring (the browser keeps the history)
@@ -173,6 +187,7 @@ static const uint8_t BLOCK_MODE_IP = 0, BLOCK_MODE_ZERO = 1, BLOCK_MODE_NX = 2;
 // ---- globals ----
 WiFiUDP dnsServer, upstreamCli, probeCli;
 WiFiServer tcpDns(DNS_PORT); // TCP :53 fallback (truncated/large upstream replies)
+WiFiServer blackhole(BLACKHOLE_PORT); // PAC URL matches are accepted then dropped
 WEBSERVER_TYPE web(80);
 File blocklist;
 uint32_t numHashes = 0, totalBlocked = 0, totalAllowed = 0, totalCached = 0;
@@ -188,6 +203,7 @@ static uint32_t locSum = 0;
 uint32_t dnsTimeouts = 0; // upstream queries that never got a reply (expired in-flight)
 uint32_t lastDnsMs = 0;   // millis() of the last handled DNS query (gate the blocking remote fetch)
 uint32_t dohHits = 0;     // client queries for known encrypted-DNS (DoH/DoT) endpoints (bypass attempts)
+uint32_t pacHits = 0;     // requests received on the black-hole port (a client is using the PAC)
 // hot-path counters (diagnostics): flash probes and cache behaviour per query
 uint32_t stQueries = 0, stBlkChecks = 0, stBlkHits = 0, stBloomSeeks = 0, stRespCached = 0;
 uint32_t stMaxGap = 0, stMaxWeb = 0, stMaxDns = 0; // worst-case (µs): loop-iteration gap / web / dns handling
@@ -196,9 +212,25 @@ uint8_t buf[1536];                                 // fits any non-fragmented UD
 // Bloom filter: the bitmap lives in flash (after an 8-byte header), so RAM use is
 // O(1) in the number of blocked domains — that is the whole point vs the old
 // sorted-hash blob (which needed 20 KB of index on the ESP32 and log2(n) reads).
-static uint32_t bloomM = 0;              // bitmap bit count (= (size-8)*8)
-static const uint8_t BLOOM_K = 7;        // hash functions (match tools/build_bloom.py)
-static const uint32_t BLOCKLIST_HDR = 8; // 'BLM1' + uint32 domain count
+static uint32_t bloomM = 0;              // bitmap bit count
+static uint32_t bloomBase = 8;           // bitmap offset in the file: 8 (BLM1) or 12 (BLM2)
+static const uint8_t BLOOM_K = 7;        // hash functions (match tools/build_bin_list_block.py)
+static const uint32_t BLOCKLIST_HDR = 8; // 'BLM1' + uint32 domain count (BLM2 adds a uint32 size)
+// Hostname regexes carried by a BLM2 blob (the compiler can't turn a regex into bloom
+// bits). Loaded into RAM — bounded by MAX_RGX × RGX_MAXLEN. Matched only on a bloom miss.
+static char rgxPat[MAX_RGX][RGX_MAXLEN];
+static uint16_t numRgx = 0;
+// GAFM section: builder-compiled provider Blooms (G/A/F/Amazon/Microsoft) loaded to RAM, used
+// only for read-only telemetry — share of ALLOWED DNS lookups per provider. Not blocking.
+static uint8_t gafamBuf[384];
+static uint16_t gafamOff[5], gafamLen[5];
+static bool gafamOk = false;
+static uint32_t gafamCnt[6] = {0}; // G, A, F(Meta), Amazon, Microsoft, other
+// Estimated destination country per allowed resolution (dashboard map). RAM only:
+// fills as traffic flows, empties on reboot (the card says "since reboot").
+static uint32_t geoHits[GEO_NCODES]; // 32-bit: one busy country can pass 65k before reboot
+static uint32_t geoMapped = 0;
+static uint32_t dnssecOk = 0, dnssecSeen = 0; // forwarded replies: AD bit set / total
 // small direct-mapped cache (both targets)
 static uint32_t cacheKey32[CACHE_SIZE];
 static uint8_t cacheRes[CACHE_SIZE];
@@ -239,7 +271,8 @@ static uint32_t evSeq = 0;
 #endif
 #define SEC_HDR_TOTAL 10 // max privacy headers (level 3 + CSP) — gauge denominator
 static uint8_t secLevel = SEC_LEVEL;
-static uint32_t secPages = 0; // pages (HTML responses) served with the privacy headers
+static uint32_t secPages = 0;    // HTML pages served WITH the privacy rewrite (numerator)
+static uint32_t pagesServed = 0; // all HTML pages served (denominator) -> % protected pages
 static uint8_t secHdrCount(uint8_t lv) { return lv >= 3 ? 10 : lv >= 2 ? 8
                                                            : lv >= 1   ? 3
                                                                        : 0; }
@@ -266,6 +299,7 @@ struct Dev {
   uint32_t ip;
   uint8_t mac[6];
   uint32_t blocked, allowed, lastSeen;
+  uint32_t pac; // requests seen on the black-hole port => this client is using the PAC
   uint16_t qps;
   uint32_t win;
   uint32_t pausedUntil;
@@ -299,6 +333,10 @@ String kwDom[MAX_KW];
 int numKw = 0;
 String wildDom[MAX_WILD];
 int numWild = 0; // wildcard block patterns ("*.ads.example.com")
+// PAC URL-block patterns ("url /js/ads.js"): matched against the full URL by the CLIENT's
+// PAC, which routes matches to this device's black-hole port (drop -> resource fails).
+String urlDom[MAX_URL];
+int numUrl = 0;
 
 // The blocklist update is done by the browser now (download + POST /upload).
 uint32_t lastWeb = 0; // last time web.handleClient() ran
@@ -318,7 +356,7 @@ uint32_t resumeAt = 0; // millis() to auto-resume; 0 = paused indefinitely / not
 // ---------- Bloom membership ----------
 // Bits live in flash after BLOCKLIST_HDR; memory is O(1) in the domain count.
 // k probes via Kirsch-Mitzenmacher: idx_i = (a + i*b) mod m, a/b = the two 32-bit
-// halves of a full FNV-1a — same construction as tools/build_bloom.py.
+// halves of a full FNV-1a — same construction as tools/build_bin_list_block.py.
 static uint64_t fnv64(const char* s, size_t n) {
   uint64_t h = 0xcbf29ce484222325ULL;
   for (size_t i = 0; i < n; i++) {
@@ -332,7 +370,7 @@ static void buildFlashIndex() {
 }
 static inline uint8_t bloomBit(uint32_t bit) {
   stBloomSeeks++;
-  if (!blocklist.seek(BLOCKLIST_HDR + (bit >> 3))) return 0;
+  if (!blocklist.seek(bloomBase + (bit >> 3))) return 0;
   uint8_t b = 0;
   blocklist.read(&b, 1);
   return (b >> (bit & 7)) & 1;
@@ -471,7 +509,37 @@ static bool isDohHost(const char* d) {
   }
   return false;
 }
+// An all-numeric, dot-separated name (an IP literal used as a hostname, e.g. a client
+// resolving the resolver's own IP). Real domains never look like this, and the Bloom
+// filter's ~0.8% false positives on their short suffixes were blocking such names.
+static bool numericName(const char* d) {
+  if (!d || !*d) return false;
+  bool any = false;
+  for (const char* p = d; *p;) {
+    const char* q = p;
+    while (*q && *q != '.') {
+      if (*q < '0' || *q > '9') return false;
+      q++;
+    }
+    if (q == p) return false; // empty label
+    any = true;
+    if (*q == 0) break;
+    p = q + 1;
+  }
+  return any;
+}
+// Special-use / infrastructure TLDs that must never be blocked: .arpa is DNS itself
+// (in-addr/ip6 reverse, home.arpa, DDR _dns.resolver.arpa); the rest are reserved names
+// (RFC 2606/6761) that don't resolve anyway. Blocking them only produces false positives.
+static bool specialUseTld(const char* d) {
+  const char* dot = strrchr(d, '.');
+  if (!dot || !dot[1]) return false;
+  const char* t = dot + 1;
+  return !strcasecmp(t, "arpa") || !strcasecmp(t, "localhost") || !strcasecmp(t, "test") ||
+         !strcasecmp(t, "invalid") || !strcasecmp(t, "example") || !strcasecmp(t, "onion");
+}
 static bool isBlocked(const char* domain) {
+  if (specialUseTld(domain)) return false; // never sinkhole infrastructure/reserved names
   // A runtime allow (exact or parent) or a built-in connectivity check overrides everything.
   const char* a = domain;
   while (a && *a) {
@@ -482,16 +550,29 @@ static bool isBlocked(const char* domain) {
     if (!strchr(an, '.')) break;
     a = an;
   }
+  const bool numeric = numericName(domain); // IP-literal name: skip the Bloom (FP-only)
   const char* p = domain;
   while (p && *p) {
     if (isBlockDomain(p)) return true;
     if (isDefaultBlock(p)) return true;
-    if (isBlockedHash(fnv64(p, strlen(p)))) return true;
+    if (!numeric && isBlockedHash(fnv64(p, strlen(p)))) return true;
     const char* dot = strchr(p, '.');
     if (!dot) break;
     const char* next = dot + 1;
     if (!strchr(next, '.')) break;
     p = next;
+  }
+  if (numRgx) { // hostname regexes from a BLM2 blob (reached only on a bloom miss)
+    const char* q = domain;
+    while (q && *q) {
+      for (uint16_t i = 0; i < numRgx; i++)
+        if (hostReMatch(rgxPat[i], q)) return true;
+      const char* dot = strchr(q, '.');
+      if (!dot) break;
+      const char* next = dot + 1;
+      if (!strchr(next, '.')) break;
+      q = next;
+    }
   }
   if (isWildBlock(domain)) return true; // wildcard rules match the full host once
   // Opt-in keyword heuristic (fallback; only when the lists didn't match).
@@ -502,14 +583,31 @@ static bool isBlocked(const char* domain) {
 // ---------- user rules (/rules.cfg) ----------
 static void saveRules(); // fwd (add* persist)
 
+// Shared store for the five String rule arrays (block / allow / keyword / wildcard / url):
+// reject duplicates & overflow, erase in place. The per-type validation stays in each add*.
+static bool rlPush(String* a, int& n, int cap, const String& v) {
+  if (!v.length() || n >= cap) return false;
+  for (int i = 0; i < n; i++)
+    if (a[i] == v) return false;
+  a[n++] = v;
+  return true;
+}
+static void rlErase(String* a, int& n, const String& v) {
+  for (int i = 0; i < n; i++)
+    if (a[i] == v) {
+      for (int j = i; j < n - 1; j++) a[j] = a[j + 1];
+      n--;
+      saveRules();
+      return;
+    }
+}
+
 static bool addBlock(String d, bool persist = true) {
   d.trim();
   d.toLowerCase();
   if (d.startsWith("www.")) d = d.substring(4);
-  if (!d.length() || d.indexOf('.') < 0 || numBlock >= MAX_CUSTOM) return false;
-  for (int i = 0; i < numBlock; i++)
-    if (blockDom[i] == d) return false;
-  blockDom[numBlock++] = d;
+  if (d.indexOf('.') < 0) return false;
+  if (!rlPush(blockDom, numBlock, MAX_CUSTOM, d)) return false;
   if (persist) saveRules();
   return true;
 }
@@ -517,13 +615,7 @@ static void removeBlock(String d) {
   d.trim();
   d.toLowerCase();
   if (d.startsWith("www.")) d = d.substring(4);
-  for (int i = 0; i < numBlock; i++)
-    if (blockDom[i] == d) {
-      for (int j = i; j < numBlock - 1; j++) blockDom[j] = blockDom[j + 1];
-      numBlock--;
-      saveRules();
-      return;
-    }
+  rlErase(blockDom, numBlock, d);
 }
 static bool isAllowDomain(const char* d) {
   for (int i = 0; i < numAllow; i++)
@@ -534,10 +626,8 @@ static bool addAllow(String d, bool persist = true) {
   d.trim();
   d.toLowerCase();
   if (d.startsWith("www.")) d = d.substring(4);
-  if (!d.length() || d.indexOf('.') < 0 || numAllow >= MAX_ALLOW) return false;
-  for (int i = 0; i < numAllow; i++)
-    if (allowDom[i] == d) return false;
-  allowDom[numAllow++] = d;
+  if (d.indexOf('.') < 0) return false;
+  if (!rlPush(allowDom, numAllow, MAX_ALLOW, d)) return false;
   if (persist) saveRules();
   return true;
 }
@@ -573,20 +663,33 @@ static void addTempAllow(String d, uint32_t ms) {
 static bool addKeyword(String t, bool persist = true) {
   t.trim();
   t.toLowerCase();
-  if (!t.length() || t.indexOf('.') >= 0 || numKw >= MAX_KW) return false;
-  for (int i = 0; i < numKw; i++)
-    if (kwDom[i] == t) return false;
-  kwDom[numKw++] = t;
+  if (t.indexOf('.') >= 0) return false;
+  if (!rlPush(kwDom, numKw, MAX_KW, t)) return false;
   if (persist) saveRules();
   return true;
 }
 static bool addWild(String p, bool persist = true) {
   p.trim();
   p.toLowerCase();
-  if (!p.length() || p.indexOf('*') < 0 || p.indexOf('.') < 0 || numWild >= MAX_WILD) return false;
-  for (int i = 0; i < numWild; i++)
-    if (wildDom[i] == p) return false;
-  wildDom[numWild++] = p;
+  if (p.indexOf('*') < 0 || p.indexOf('.') < 0) return false;
+  if (!rlPush(wildDom, numWild, MAX_WILD, p)) return false;
+  if (persist) saveRules();
+  return true;
+}
+// PAC URL-block pattern: a substring matched against the full URL by the client's PAC
+// (which sees paths). Matches are routed to this device's black-hole port. No JS-unsafe chars.
+static bool addUrl(String p, bool persist = true) {
+  p.trim();
+  // The PAC is JavaScript served to every client: allow only URL-safe characters. A quote,
+  // backslash, control char or JS/PAC punctuation breaks out of the string literal — a single
+  // newline is enough to make the whole PAC a syntax error (silently disabling the proxy).
+  if (p.length() > 120) return false;
+  for (size_t i = 0; i < p.length(); i++) {
+    char ch = p[i];
+    if (ch < 0x21 || ch > 0x7e) return false;                  // space, control, non-ASCII
+    if (strchr("'\\\"(){};,<>`", ch)) return false;            // JS/PAC syntax
+  }
+  if (!rlPush(urlDom, numUrl, MAX_URL, p)) return false;
   if (persist) saveRules();
   return true;
 }
@@ -594,35 +697,17 @@ static void removeAllow(String d) {
   d.trim();
   d.toLowerCase();
   if (d.startsWith("www.")) d = d.substring(4);
-  for (int i = 0; i < numAllow; i++)
-    if (allowDom[i] == d) {
-      for (int j = i; j < numAllow - 1; j++) allowDom[j] = allowDom[j + 1];
-      numAllow--;
-      saveRules();
-      return;
-    }
+  rlErase(allowDom, numAllow, d);
 }
 static void removeKeyword(String t) {
   t.trim();
   t.toLowerCase();
-  for (int i = 0; i < numKw; i++)
-    if (kwDom[i] == t) {
-      for (int j = i; j < numKw - 1; j++) kwDom[j] = kwDom[j + 1];
-      numKw--;
-      saveRules();
-      return;
-    }
+  rlErase(kwDom, numKw, t);
 }
 static void removeWild(String p) {
   p.trim();
   p.toLowerCase();
-  for (int i = 0; i < numWild; i++)
-    if (wildDom[i] == p) {
-      for (int j = i; j < numWild - 1; j++) wildDom[j] = wildDom[j + 1];
-      numWild--;
-      saveRules();
-      return;
-    }
+  rlErase(wildDom, numWild, p);
 }
 static void saveRules() {
   File f = LittleFS.open("/rules.cfg", "w");
@@ -631,6 +716,7 @@ static void saveRules() {
   for (int i = 0; i < numAllow; i++) f.println("allow " + allowDom[i]);
   for (int i = 0; i < numKw; i++) f.println("keyword " + kwDom[i]);
   for (int i = 0; i < numWild; i++) f.println("wildcard " + wildDom[i]);
+  for (int i = 0; i < numUrl; i++) f.println("url " + urlDom[i]);
   f.close();
 }
 // First boot on this format: fold the old /custom.txt + /allow.txt into /rules.cfg and
@@ -659,7 +745,7 @@ static void migrateRules() {
   Serial.println("rules: migrated old files + default keywords -> /rules.cfg");
 }
 static void loadRules() {
-  numBlock = numAllow = numKw = numWild = 0;
+  numBlock = numAllow = numKw = numWild = numUrl = 0;
   File f = LittleFS.open("/rules.cfg", "r");
   if (!f) {
     migrateRules();
@@ -690,6 +776,7 @@ static void loadRules() {
     } else if (verb == "allow" || verb == "a") addAllow(val, false);
     else if (verb == "keyword" || verb == "k") addKeyword(val, false);
     else if (verb == "wildcard" || verb == "w") addWild(val, false);
+    else if (verb == "url" || verb == "u") addUrl(val, false);
   }
   f.close();
 }
@@ -1110,6 +1197,7 @@ static uint32_t safeSearchIP(const char* d) {
     if ((safeSearchMask & SAFE_HOSTS[i].bit) && strcasecmp(h, SAFE_HOSTS[i].host) == 0) return SAFE_HOSTS[i].ip;
   return 0;
 }
+static bool macZero(const uint8_t* m) { return !(m[0] | m[1] | m[2] | m[3] | m[4] | m[5]); }
 static void getMac(uint32_t ip, uint8_t* mac) {
   memset(mac, 0, 6);
   ip4_addr_t ipa;
@@ -1122,23 +1210,40 @@ static void getMac(uint32_t ip, uint8_t* mac) {
       return;
     }
 }
+// Actively resolve `ip` so its MAC lands in the ARP cache. Needed because a client
+// that sends a single DNS query is otherwise never looked up again (getClient only
+// runs on the DNS path), leaving its MAC 00:00:00:00:00:00 forever. Passive: fills
+// the cache asynchronously; the next getMac/stats poll reads the reply.
+static void requestMac(uint32_t ip) {
+  ip4_addr_t ipa;
+  ipa.addr = ip;
+  struct netif* best = nullptr;
+  for (struct netif* nif = netif_list; nif; nif = nif->next)
+    if (ip4_addr_netcmp(&ipa, ip_2_ip4(&nif->ip_addr), ip_2_ip4(&nif->netmask))) { best = nif; break; }
+  if (!best) best = netif_list;                       // unknown subnet: try the first netif
+  if (best) etharp_query(best, &ipa, nullptr);        // q == NULL -> send an ARP request only
+}
 static Dev* getClient(uint32_t ip) {
   for (int i = 0; i < numClients; i++)
     if (clients[i].ip == ip) {
       clients[i].lastSeen = millis();
-      if (!(clients[i].mac[0] | clients[i].mac[1] | clients[i].mac[2] | clients[i].mac[3] | clients[i].mac[4] | clients[i].mac[5]))
-        getMac(ip, clients[i].mac); // wasn't in the ARP cache when first seen — retry now
+      if (macZero(clients[i].mac)) {
+        getMac(ip, clients[i].mac);          // wasn't in the ARP cache when first seen — retry now
+        if (macZero(clients[i].mac)) requestMac(ip);
+      }
       return &clients[i];
     }
   if (numClients < MAX_CLIENTS) {
     Dev* c = &clients[numClients++];
     c->ip = ip;
     c->blocked = c->allowed = 0;
+    c->pac = 0;
     c->lastSeen = millis();
     c->qps = 0;
     c->win = 0;
     c->pausedUntil = 0;
     getMac(ip, c->mac);
+    if (macZero(c->mac)) requestMac(ip);   // fill the ARP cache so the MAC shows on the next poll
     return c;
   }
   int oldest = 0; // full: evict the least-recently-seen
@@ -1147,11 +1252,13 @@ static Dev* getClient(uint32_t ip) {
   Dev* c = &clients[oldest];
   c->ip = ip;
   c->blocked = c->allowed = 0;
+  c->pac = 0;
   c->lastSeen = millis();
   c->qps = 0;
   c->win = 0;
   c->pausedUntil = 0;
   getMac(ip, c->mac);
+  if (macZero(c->mac)) requestMac(ip);
   return c;
 }
 
@@ -1353,6 +1460,119 @@ static uint32_t answerTTL(const uint8_t* p, int n, int qend) {
   if (ttl > 3600) ttl = 3600;
   return ttl;
 }
+// --- DNS name/RR helpers (answers may use compression pointers) ---
+static int skipName(const uint8_t* p, int n, int off) {
+  while (off >= 0 && off < n) {
+    uint8_t l = p[off];
+    if (l == 0) return off + 1;
+    if ((l & 0xC0) == 0xC0) return (off + 2 <= n) ? off + 2 : -1;
+    off += 1 + l;
+  }
+  return -1;
+}
+// First public A record in an upstream answer, for the destination map. Reuses skipName;
+// private/reserved A records are skipped (a sinkholed or LAN answer is not a destination).
+static bool firstAPublic(const uint8_t* p, int n, int qend, uint32_t* out) {
+  int i = qend;
+  uint16_t an = (uint16_t)((p[6] << 8) | p[7]);
+  for (int a = 0; a < an && a < 32; a++) {
+    i = skipName(p, n, i);
+    if (i < 0 || i + 10 > n) return false;
+    uint16_t type = (uint16_t)((p[i] << 8) | p[i + 1]);
+    uint16_t rdlen = (uint16_t)((p[i + 8] << 8) | p[i + 9]);
+    int rdata = i + 10;
+    if (rdata + rdlen > n) return false;
+    if (type == 1 && rdlen == 4 && !isPrivateIP(p + rdata)) {
+      *out = ((uint32_t)p[rdata] << 24) | ((uint32_t)p[rdata + 1] << 16) |
+             ((uint32_t)p[rdata + 2] << 8) | p[rdata + 3];
+      return true;
+    }
+    i = rdata + rdlen;
+  }
+  return false;
+}
+// Count the estimated destination country of an allowed answer. O(1): one byte in flash.
+static void noteGeo(const uint8_t* p, int n, int qend) {
+  uint32_t ip;
+  if (!firstAPublic(p, n, qend, &ip)) return;
+  uint8_t cc = pgm_read_byte(&GEO_TABLE[ip >> 18]);
+  if (cc >= GEO_NCODES) return; // 255 = mixed/unknown -> neutral on the map
+  geoHits[cc]++;
+  geoMapped++;
+}
+static int readName(const uint8_t* p, int n, int off, char* out, int outSz) {
+  int o = 0, next = off, jumps = 0;
+  bool jumped = false;
+  while (off >= 0 && off < n) {
+    uint8_t l = p[off];
+    if (l == 0) {
+      out[o] = 0;
+      return jumped ? next : off + 1;
+    }
+    if ((l & 0xC0) == 0xC0) {
+      if (off + 1 >= n) return -1;
+      if (!jumped) {
+        next = off + 2;
+        jumped = true;
+      }
+      if (++jumps > 16) return -1;
+      off = ((l & 0x3F) << 8) | p[off + 1];
+      continue;
+    }
+    if (off + 1 + l > n) return -1; // label extends past the packet
+    if (o + (o ? 1 : 0) + l + 1 > outSz) return -1;
+    if (o) out[o++] = '.';
+    for (int k = 0; k < l; k++) out[o++] = (char)tolower(p[off + 1 + k]);
+    off += 1 + l;
+  }
+  return -1;
+}
+// CNAME-cloaking defense: if an answer CNAME points at a blocklisted name, treat the whole
+// reply as blocked. Trackers hide behind a first-party CNAME (tracker.site.com -> vendor.tracker.com);
+// the client only queried the site's own name, which a plain DNS lookup never matches.
+static bool cnameBlocked(const uint8_t* p, int n, int qend, char* out, int outSz) {
+  int an = (p[6] << 8) | p[7];
+  int off = qend;
+  for (int i = 0; i < an; i++) {
+    off = skipName(p, n, off);
+    if (off < 0 || off + 10 > n) return false;
+    uint16_t type = (p[off] << 8) | p[off + 1];
+    uint16_t rdlen = (p[off + 8] << 8) | p[off + 9];
+    int rdata = off + 10;
+    if (rdata + rdlen > n) return false;
+    if (type == 5 && rdlen > 1 && readName(p, n, rdata, out, outSz) > 0 && isBlocked(out)) return true;
+    off = rdata + rdlen;
+  }
+  return false;
+}
+// Rewrite every answer RR's TTL down to `cap` seconds so a new block/allow takes effect fast
+// (clients cache the answer). The response cache stores the clamped TTL too.
+static void clampTTL(uint8_t* p, int n, int qend, uint32_t cap) {
+  if (!cap || n < 12 || (p[2] & 0x02)) return; // 0x02 = TC (truncated): leave it
+  int an = (p[6] << 8) | p[7];
+  int off = qend;
+  for (int i = 0; i < an; i++) {
+    off = skipName(p, n, off);
+    if (off < 0 || off + 10 > n) return;
+    uint32_t ttl = ((uint32_t)p[off + 4] << 24) | ((uint32_t)p[off + 5] << 16) | ((uint32_t)p[off + 6] << 8) | p[off + 7];
+    if (ttl > cap) {
+      p[off + 4] = (uint8_t)(cap >> 24);
+      p[off + 5] = (uint8_t)(cap >> 16);
+      p[off + 6] = (uint8_t)(cap >> 8);
+      p[off + 7] = (uint8_t)cap;
+    }
+    off = off + 10 + ((p[off + 8] << 8) | p[off + 9]);
+  }
+}
+// Shared counters for the DNS paths below (one place to bump total + per-client).
+static inline void markAllowed(Dev* c) {
+  totalAllowed++;
+  if (c) c->allowed++;
+}
+static inline void markBlocked(Dev* c) {
+  totalBlocked++;
+  if (c) c->blocked++;
+}
 static void pollUpstream() {
   for (int budget = 0; budget < 16; budget++) {
     int sz = upstreamCli.parsePacket();
@@ -1375,6 +1595,8 @@ static void pollUpstream() {
     InFlight f = inflight[slot]; // copy out before marking free
     inflight[slot].used = false;
     dnsFails[dnsCur] = 0; // the active resolver just answered
+    dnssecSeen++;         // DNSSEC telemetry: upstream set AD (validated) on this reply?
+    if (buf[3] & 0x20) dnssecOk++;
     {
       uint32_t r = millis() - f.sentAt;
       if (r > 5000) r = 5000; // windowed average of upstream RTT
@@ -1404,6 +1626,22 @@ static void pollUpstream() {
       dnsServer.endPacket();
       continue;
     }
+    char cn[256];
+    if (cnameBlocked(buf, n, f.qend, cn, sizeof(cn))) { // CNAME cloaking: target is blocklisted
+      // Answer with the normal block path so BLOCK_MODE (ip / zero / nxdomain) is honoured.
+      buf[0] = f.cid >> 8; // restore the client's transaction id
+      buf[1] = f.cid & 0xFF;
+      uint16_t qt = (f.qend >= 4) ? (uint16_t)((buf[f.qend - 4] << 8) | buf[f.qend - 3]) : 1;
+      int blen = buildBlocked(f.qend, qt);
+      dnsServer.beginPacket(IPAddress(f.cip), f.cport);
+      dnsServer.write(buf, blen);
+      dnsServer.endPacket();
+      markBlocked(getClient(f.cip));
+      pushBlocked(cn, f.cip);
+      continue;
+    }
+    noteGeo(buf, n, f.qend);             // estimated destination, before the TTL rewrite
+    clampTTL(buf, n, f.qend, TTL_CLAMP_S); // fast policy changes (clients cache answers)
     if (f.key && n <= RESP_MAX) { // cache the reply (TTL-clamped)
       RespCache<RESP_CACHE_N, RESP_MAX>::Entry* s = respCache.insert(f.key, millis());
       s->key = f.key;
@@ -1431,41 +1669,79 @@ static void pollUpstream() {
       }
     }
 }
+// WPAD only for the device's own names: "wpad", "wpad.local", "wpad.<host>", "wpad.<host>.local".
+// Deliberately NOT "wpad.<any domain>" — claiming every wpad.* is a global WPAD claim that can
+// poison other networks' auto-discovery (and is a classic spoofing vector).
+static bool isWpadName(const char* d) {
+  if (strcasecmp(d, "wpad") == 0 || strcasecmp(d, "wpad.local") == 0) return true;
+  const char* host = cfgHost.length() ? cfgHost.c_str() : WIFI_HOST;
+  if (!host || !*host) return false;
+  char a[64], b[64];
+  snprintf(a, sizeof(a), "wpad.%s", host);
+  snprintf(b, sizeof(b), "wpad.%s.local", host);
+  return strcasecmp(d, a) == 0 || strcasecmp(d, b) == 0;
+}
 // Drain a whole RX burst per call (capped, so web/OTA still get a turn).
 // Classify a parsed query and answer it locally when possible — IPv4-only AAAA strip,
 // local record, SafeSearch, or a block. Returns the reply length in `buf` (>0), or 0 to
 // forward upstream. Shared by the UDP (handleDns) and TCP (handleTcpDns) paths.
 static int localAnswer(Dev* c, uint32_t cip, const char* domain, size_t dl, uint16_t qtype, int qend) {
   if (ipv4Only && qtype == 28) {
-    totalAllowed++;
-    if (c) c->allowed++;
+    markAllowed(c);
     return buildAnswer(qend, IPAddress(0, 0, 0, 0), 28);
+  }
+  // WPAD: answer "wpad"/"wpad.*" with this device so browsers auto-find /wpad.dat (the PAC).
+  if (dl && isWpadName(domain)) {
+    markAllowed(c);
+    return buildAnswer(qend, WiFi.localIP(), qtype);
   }
   uint32_t lip;
   if (dl && lookupHost(domain, lip)) {
-    totalAllowed++;
-    if (c) c->allowed++;
+    markAllowed(c);
     return buildAnswer(qend, IPAddress(lip), qtype);
   }
   uint32_t ssip;
   if (dl && (ssip = safeSearchIP(domain))) {
-    totalAllowed++;
-    if (c) c->allowed++;
+    markAllowed(c);
     return buildAnswer(qend, IPAddress(ssip), qtype);
   }
   bool paused = c && c->pausedUntil && (int32_t)(c->pausedUntil - millis()) > 0;
   if (blockingOn && dl && !paused && isBlocked(domain)) { // per-client pause bypasses blocking
     int rlen = buildBlocked(qend, qtype);
-    totalBlocked++;
-    if (c) c->blocked++;
+    markBlocked(c);
     digitalWrite(LED_PIN, LED_ON);
     ledUntil = millis() + LED_BLINK_MS; // status LED blink
     pushBlocked(dl ? domain : "?", cip);
     return rlen;
   }
-  totalAllowed++;
-  if (c) c->allowed++;
+  markAllowed(c);
   return 0; // forward upstream
+}
+// GAFM classification: suffix walk against the tiny provider Blooms loaded from the bin.
+static bool gafamMember(int p, const char* d) {
+  if (!gafamOk || !gafamLen[p]) return false;
+  uint64_t h = fnv64(d, strlen(d));
+  uint32_t a = (uint32_t)(h >> 32), b = (uint32_t)h, m = (uint32_t)gafamLen[p] * 8;
+  const uint8_t* bm = gafamBuf + gafamOff[p];
+  for (uint8_t i = 0; i < BLOOM_K; i++) {
+    uint32_t bit = (uint32_t)(a + (uint32_t)i * b) % m;
+    if (!((bm[bit >> 3] >> (bit & 7)) & 1)) return false;
+  }
+  return true;
+}
+static int gafamOf(const char* domain) {
+  if (!gafamOk) return -1;
+  const char* p = domain;
+  while (p && *p) {
+    for (int i = 0; i < 5; i++)
+      if (gafamMember(i, p)) return i;
+    const char* dot = strchr(p, '.');
+    if (!dot) break;
+    const char* next = dot + 1;
+    if (!strchr(next, '.')) break;
+    p = next;
+  }
+  return -1;
 }
 static bool handleDns() {
   bool did = false;
@@ -1506,6 +1782,10 @@ static bool handleDns() {
       dnsServer.endPacket();
       continue;
     }
+    if (dl) { // allowed lookup: attribute it to a provider for the GAFAM telemetry
+      int gp = gafamOf(domain);
+      gafamCnt[gp >= 0 ? gp : 5]++;
+    }
     const uint16_t cid = (uint16_t)((buf[0] << 8) | buf[1]);
     uint32_t key = dl ? ((uint32_t)fnv64(domain, strlen(domain)) ^ (uint32_t)(qtype * 0x9E3779B1u)) : 0;
     if (key) { // serve from the response cache if fresh
@@ -1515,6 +1795,7 @@ static bool handleDns() {
         memcpy(buf, s->data, len);
         buf[0] = cid >> 8;
         buf[1] = cid & 0xFF;
+        noteGeo(buf, len, qend); // same answer a fresh resolve would have counted
         dnsServer.beginPacket(cip, cport);
         dnsServer.write(buf, len);
         dnsServer.endPacket();
@@ -1603,13 +1884,37 @@ static void handleTcpDns() {
   size_t dl = parseQuery(buf, qlen, domain, &qtype, &qend);
   uint32_t cip = (uint32_t)cli.remoteIP();
   int rlen = localAnswer(getClient(cip), cip, domain, dl, qtype, qend);
-  if (rlen == 0) rlen = tcpForward(qlen);
+  if (rlen == 0) {
+    rlen = tcpForward(qlen);
+    if (rlen > 0) noteGeo(buf, rlen, qend);
+  }
   if (rlen > 0) { // length-prefixed reply
     const uint8_t lh[2] = {(uint8_t)(rlen >> 8), (uint8_t)(rlen & 0xFF)};
     cli.write(lh, 2);
     cli.write(buf, rlen);
   }
   cli.stop();
+}
+// Accept a PAC-routed URL and drop it at once: the resource (HTTP) or its TLS CONNECT
+// (HTTPS) fails to complete, so the client treats it as blocked. No content is served, so
+// no certificates/MITM are involved; only the URLs the client's PAC matched hit this port.
+static void handleBlackhole() {
+  WiFiClient c = blackhole.accept();
+  if (!c) return;
+  // A request on this port can only come from a client whose PAC routed a matched URL here
+  // => it is using the PAC. Record it per client (and globally) so the dashboard can tell a
+  // PAC client apart from a DNS-only one. DNS itself gives no such signal.
+  // Only count IPs already known from DNS: a port scan of :81 (or any LAN host that never
+  // queried us) must not create client entries, push the table to MAX_CLIENTS, or look like
+  // PAC usage. DNS itself gives the only trustworthy signal that a client exists.
+  uint32_t rip = (uint32_t)c.remoteIP();
+  for (int i = 0; i < numClients; i++)
+    if (clients[i].ip == rip) {
+      pacHits++;
+      clients[i].pac++;
+      break;
+    }
+  c.stop();
 }
 
 // ---------- web ----------
@@ -1623,6 +1928,19 @@ static String nameForIp(uint32_t ip) {
   for (int i = 0; i < numNames; i++)
     if (clientNames[i].ip == ip) return clientNames[i].name;
   return String("");
+}
+static String jesc(const String& s); // fwd (defined with the JSON helpers below)
+// Side-effect-free MAC + friendly name for a client IP (for the blocked-event JSON), so the
+// dashboard can attribute a block to the right DEVICE (MAC/name) and not just the IP, which
+// DHCP can reassign. Empty MAC when the IP isn't in the client/ARP table.
+static String ipClientExtra(uint32_t ip) {
+  String mac;
+  for (int i = 0; i < numClients; i++)
+    if (clients[i].ip == ip) {
+      mac = macStr(clients[i].mac);
+      break;
+    }
+  return ",\"mac\":\"" + mac + "\",\"name\":\"" + jesc(nameForIp(ip)) + "\"";
 }
 static void saveNames() {
   File f = LittleFS.open("/names.cfg", "w");
@@ -1715,15 +2033,16 @@ static String htmlEscape(const String& s) {
 #include "page.h" // dashboard HTML (PROGMEM)
 
 // Security headers applied to every HTML/JSON response (no TLS here, so no HSTS — it would
-// be meaningless/ignored over plain HTTP). The dashboard is self-contained (VanJS and icons are
-// inlined) and probes *.dnscheck (connect-src http:); the block page is inline-only.
-#define CSP_APP "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+// be meaningless/ignored over plain HTTP). The dashboard inlines its icons and loads Alpine
+// from unpkg (the browser caches it) and probes *.dnscheck (connect-src http:); the block page
+// is inline-only. Alpine's CSP build interprets directives without eval — so no 'unsafe-eval'
+// here. Keep this host in sync with the <script src> in web/index.html.
+#define CSP_APP "default-src 'none'; script-src 'unsafe-inline' https://unpkg.com; style-src 'unsafe-inline'; img-src 'self' data: https://icons.duckduckgo.com; connect-src 'self' http:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 #define CSP_BLOCK "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 // 0 off · 1 basic (nosniff, X-Frame-Options, Referrer-Policy) · 2 standard (+Permissions-Policy,
 // X-Robots-Tag, X-DNS-Prefetch-Control, X-Permitted-Cross-Domain-Policies, CSP) · 3 strict (+COOP/CORP).
 static void secHeaders(const char* csp) {
   if (secLevel <= 0) return;
-  if (csp) secPages++; // a page (dashboard/block) got the privacy rewrite
   web.sendHeader("X-Content-Type-Options", "nosniff");
   web.sendHeader("X-Frame-Options", "DENY");
   web.sendHeader("Referrer-Policy", "no-referrer"); // don't leak the URL/host out of our pages
@@ -1740,9 +2059,20 @@ static void secHeaders(const char* csp) {
   }
 }
 
+// 401 with a human-readable body. The WWW-Authenticate header is what makes the browser
+// prompt; this HTML is what remains if the prompt is dismissed (or the URL is opened by curl).
+static void askAuth() {
+  web.requestAuthentication(BASIC_AUTH, "esp-adblock",
+                            "<!doctype html><meta charset=utf-8><title>Login required</title>"
+                            "<body style=\"font:16px/1.5 system-ui,sans-serif;background:#0d1117;color:#e6edf3;max-width:34em;margin:12vh auto;padding:0 1.2em\">"
+                            "<h1 style=\"font-size:19px\">Login required</h1>"
+                            "<p>Your browser should have asked for a user name and password.</p>"
+                            "<p>Both are in <code>config.env</code> (<code>WEB_USER</code>, <code>WEB_PASS</code>).</p>"
+                            "<p>No prompt appeared? Reload this page.</p></body>");
+}
 static void handleStats() {
   if (!web.authenticate(WEB_USER, WEB_PASS)) {
-    web.requestAuthentication();
+    askAuth();
     return;
   }
   web.sendHeader("Cache-Control", "no-store");
@@ -1752,7 +2082,9 @@ static void handleStats() {
   snprintf(ut, sizeof(ut), "%lud %luh %lum", (unsigned long)(up / 86400), (unsigned long)((up % 86400) / 3600), (unsigned long)((up % 3600) / 60));
   String j;
   j.reserve(4096); // clients[] + rules + events can exceed 1200; avoid realloc/fragmentation
-  j = "{\"ip\":\"" + WiFi.localIP().toString() + "\",\"ver\":\"" + FW_VERSION + "\",\"upstream\":\"" + upstreamIP.toString() + "\",\"boot\":" + bootId + ",\"pl\":" + secLevel + ",\"ph\":" + secHdrCount(secLevel) + ",\"php\":" + secPages + ",\"pht\":" + SEC_HDR_TOTAL + ",\"doh\":" + dohHits + ",\"blocked\":" + totalBlocked + ",\"allowed\":" + totalAllowed + ",\"cached\":" + totalCached +
+  j = "{\"ip\":\"" + WiFi.localIP().toString() + "\",\"ver\":\"" + FW_VERSION + "\",\"upstream\":\"" + upstreamIP.toString() + "\",\"boot\":" + bootId + ",\"pl\":" + secLevel + ",\"ph\":" + secHdrCount(secLevel) + ",\"php\":" + secPages + ",\"psv\":" + pagesServed + ",\"pht\":" + SEC_HDR_TOTAL + ",\"doh\":" + dohHits + ",\"pac\":" + pacHits +
+        ",\"gafam\":[" + gafamCnt[0] + "," + gafamCnt[1] + "," + gafamCnt[2] + "," + gafamCnt[3] + "," + gafamCnt[4] + "," + gafamCnt[5] + "]" +
+        ",\"dnss\":[" + dnssecOk + "," + dnssecSeen + "]" + ",\"blocked\":" + totalBlocked + ",\"allowed\":" + totalAllowed + ",\"cached\":" + totalCached +
       ",\"domains\":" + numHashes + ",\"rssi\":" + WiFi.RSSI() + ",\"temp\":" + String(temperatureRead(), 1) +
       ",\"cpu\":" + ESP.getCpuFreqMHz() +
       ",\"dns\":" + (rttMs + locMs) + ",\"dnsf\":" + rttMs + ",\"dnsl\":" + locMs + ",\"dnsTo\":" + dnsTimeouts + ",\"vcc\":" + chipVcc() +
@@ -1763,7 +2095,23 @@ static void handleStats() {
     j += (dnsRtt[i] == DNS_DEAD) ? String(-1) : String(dnsRtt[i]);
     j += ",\"cur\":" + String(i == dnsCur ? "true" : "false") + "}";
   }
-  j += "],\"pf\":" + String(dnsProbeFails) + ",\"dq\":" + stQueries + ",\"bc\":" + stBlkChecks + ",\"bch\":" + stBlkHits + ",\"bs\":" + stBloomSeeks + ",\"rc\":" + stRespCached +
+  j += "],\"geo\":[";
+  {
+    bool first = true;
+    for (uint16_t i = 0; i < GEO_NCODES; i++) {
+      if (!geoHits[i]) continue;
+      char cc[3];
+      cc[0] = (char)pgm_read_byte(&GEO_CODES[i * 2]);
+      cc[1] = (char)pgm_read_byte(&GEO_CODES[i * 2 + 1]);
+      cc[2] = 0;
+      j += (first ? "" : ",");
+      first = false;
+      j += "[\"" + String(cc) + "\"," + geoHits[i] + "]";
+    }
+  }
+  j += "],\"geoMapped\":";
+  j += geoMapped;
+  j += ",\"pf\":" + String(dnsProbeFails) + ",\"dq\":" + stQueries + ",\"bc\":" + stBlkChecks + ",\"bch\":" + stBlkHits + ",\"bs\":" + stBloomSeeks + ",\"rc\":" + stRespCached +
        ",\"lg\":" + (stMaxGap / 1000) + ",\"lw\":" + (stMaxWeb / 1000) + ",\"ld\":" + (stMaxDns / 1000) +
        ",\"heap\":" + ESP.getFreeHeap() + ",\"uptime\":\"" + ut + "\"" +
        ",\"upat\":" + (lastUpdateMs ? (uint32_t)((millis() - lastUpdateMs) / 1000) : 0) +
@@ -1774,9 +2122,10 @@ static void handleStats() {
        ",\"clients\":[";
   for (int i = 0; i < numClients; i++) {
     Dev& c = clients[i];
+    if (macZero(c.mac)) getMac(c.ip, c.mac);   // pick up the ARP reply since requestMac()
     IPAddress ip(c.ip);
     j += (i ? "," : "");
-    j += "{\"ip\":\"" + ip.toString() + "\",\"mac\":\"" + macStr(c.mac) + "\",\"name\":\"" + jesc(nameForIp(c.ip)) + "\",\"blocked\":" + c.blocked + ",\"allowed\":" + c.allowed + ",\"ps\":" + ((c.pausedUntil && (int32_t)(c.pausedUntil - millis()) > 0) ? (uint32_t)((c.pausedUntil - millis()) / 1000) : 0) + "}";
+    j += "{\"ip\":\"" + ip.toString() + "\",\"mac\":\"" + macStr(c.mac) + "\",\"name\":\"" + jesc(nameForIp(c.ip)) + "\",\"blocked\":" + c.blocked + ",\"allowed\":" + c.allowed + ",\"ps\":" + ((c.pausedUntil && (int32_t)(c.pausedUntil - millis()) > 0) ? (uint32_t)((c.pausedUntil - millis()) / 1000) : 0) + ",\"pac\":" + c.pac + "}";
   }
   j += "],\"custom\":[";
   for (int i = 0; i < numBlock; i++) {
@@ -1798,6 +2147,11 @@ static void handleStats() {
     j += (i ? "," : "");
     j += "\"" + jesc(kwDom[i]) + "\"";
   }
+  j += "],\"url\":[";
+  for (int i = 0; i < numUrl; i++) {
+    j += (i ? "," : "");
+    j += "\"" + jesc(urlDom[i]) + "\"";
+  }
   j += "],\"hosts\":[";
   {
     bool f2 = true;
@@ -1817,7 +2171,7 @@ static void handleStats() {
       if (e.seq != s) continue;
       j += (f2 ? "" : ",");
       f2 = false;
-      j += "{\"seq\":" + String(e.seq) + ",\"host\":\"" + jesc(String(e.host)) + "\",\"cip\":\"" + IPAddress(e.cip).toString() + "\"}";
+      j += "{\"seq\":" + String(e.seq) + ",\"host\":\"" + jesc(String(e.host)) + "\",\"cip\":\"" + IPAddress(e.cip).toString() + "\"" + ipClientExtra(e.cip) + ",\"gaf\":" + gafamOf(e.host) + "}";
     }
   }
   j += "]}";
@@ -1827,7 +2181,7 @@ static void handleStats() {
 // list client-side; the device only holds the small ring, no history.
 static void handleEvents() {
   if (!web.authenticate(WEB_USER, WEB_PASS)) {
-    web.requestAuthentication();
+    askAuth();
     return;
   }
   web.sendHeader("Cache-Control", "no-store");
@@ -1843,7 +2197,7 @@ static void handleEvents() {
     if (e.seq != s) continue;
     j += (first ? "" : ",");
     first = false;
-    j += "{\"seq\":" + String(e.seq) + ",\"host\":\"" + jesc(String(e.host)) + "\",\"cip\":\"" + IPAddress(e.cip).toString() + "\"}";
+    j += "{\"seq\":" + String(e.seq) + ",\"host\":\"" + jesc(String(e.host)) + "\",\"cip\":\"" + IPAddress(e.cip).toString() + "\"" + ipClientExtra(e.cip) + ",\"gaf\":" + gafamOf(e.host) + "}";
   }
   j += "]}";
   web.send(200, "application/json", j);
@@ -1856,7 +2210,7 @@ static bool requireAuth() {
     return false;
   }
   if (web.authenticate(WEB_USER, WEB_PASS)) return true;
-  web.requestAuthentication();
+  askAuth();
   return false;
 }
 
@@ -1882,16 +2236,133 @@ static void handleAllow() {
 // PAC: served as-is; the OS/browser runs FindProxyForURL. Local names stay DIRECT.
 static void handlePac() {
   web.sendHeader("Cache-Control", "no-store");
+  String bh = WiFi.localIP().toString() + ":" + String(BLACKHOLE_PORT);
   String b = "function FindProxyForURL(url, host){";
+  // "url <substr>" rules: the client's PAC sees the full URL (path included) and routes a
+  // match to this device's black-hole port, which just drops it -> that resource fails to
+  // load. This device never proxies real traffic; it only closes these connections.
+  for (int i = 0; i < numUrl; i++)
+    b += "if(url.indexOf('" + urlDom[i] + "')>=0)return 'PROXY " + bh + ";';";
   b += "if(isPlainHostName(host)||shExpMatch(host,'*.local')||host=='localhost'||shExpMatch(host,'127.*')||shExpMatch(host,'192.168.*')||shExpMatch(host,'10.*'))return 'DIRECT';";
   b += proxyAddr.length() ? ("return 'PROXY " + proxyAddr + "; DIRECT';}") : "return 'DIRECT';}";
   web.send(200, "application/x-ns-proxy-autoconfig", b);
 }
+// DoH (RFC 8484) WITHOUT TLS, on the plain HTTP server: GET /dns-query?dns=<base64url> or
+// POST /dns-query (application/dns-message). Lets a cooperating client app use this device
+// as its resolver over DoH-in-the-clear — no certificate. OS-native DoH still can't (it
+// demands HTTPS); plain DNS :53 stays the universal path.
+static int b64urlDecode(const String& s, uint8_t* out, int outSz) {
+  int o = 0, val = 0, bits = 0;
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    int d;
+    if (c >= 'A' && c <= 'Z') d = c - 'A';
+    else if (c >= 'a' && c <= 'z') d = c - 'a' + 26;
+    else if (c >= '0' && c <= '9') d = c - '0' + 52;
+    else if (c == '-' || c == '+') d = 62;
+    else if (c == '_' || c == '/') d = 63;
+    else if (c == '=') break;
+    else continue; // skip whitespace
+    val = (val << 6) | d;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      if (o < outSz) out[o++] = (uint8_t)(val >> bits);
+    }
+  }
+  return o;
+}
+// Blocking single-shot upstream query (DoH is rare, so a synchronous wait is fine).
+static int dohForward(int qlen) {
+  WiFiUDP u;
+  if (!u.begin(0)) return 0;
+  uint16_t id = (uint16_t)rnd32();
+  buf[0] = id >> 8;
+  buf[1] = id & 0xFF;
+  u.beginPacket(upstreamIP, UPSTREAM_PORT);
+  u.write(buf, qlen);
+  u.endPacket();
+  uint32_t t0 = millis();
+  int n = 0;
+  while ((uint32_t)(millis() - t0) < 2000) {
+    int sz = u.parsePacket();
+    if (sz <= 0) continue;
+    if (sz > (int)sizeof(buf)) { // don't relay a truncated reply
+      u.flush();
+      continue;
+    }
+    n = u.read(buf, sizeof(buf));
+    if (n >= 12 && (((buf[0] << 8) | buf[1]) == id)) break;
+    n = 0;
+  }
+  u.stop();
+  return n;
+}
+static void handleDoh() {
+  int qlen = 0;
+  if (web.method() == HTTP_GET) {
+    qlen = b64urlDecode(web.arg("dns"), buf, sizeof(buf));
+  } else {
+    String b = web.arg("plain");
+    qlen = b.length();
+    if (qlen < 12 || qlen > (int)sizeof(buf)) qlen = 0;
+    else memcpy(buf, b.c_str(), qlen);
+  }
+  if (qlen < 12) {
+    web.send(400, "text/plain", "bad dns query");
+    return;
+  }
+  char domain[256];
+  uint16_t qtype = 0;
+  int qend = qlen;
+  size_t dl = parseQuery(buf, qlen, domain, &qtype, &qend);
+  uint32_t cip = (uint32_t)web.client().remoteIP();
+  int rlen = localAnswer(getClient(cip), cip, domain, dl, qtype, qend); // block/local/safesearch
+  if (rlen == 0) {
+    uint16_t oid = (buf[0] << 8) | buf[1];
+    rlen = dohForward(qlen);
+    if (rlen > 0) {
+      buf[0] = oid >> 8;
+      buf[1] = oid & 0xFF; // DoH reply must echo the request txid
+      char cn[256];
+      if (cnameBlocked(buf, rlen, qend, cn, sizeof(cn))) { // same defenses as the UDP path
+        buf[2] = 0x81;
+        buf[3] = 0x83;
+        buf[6] = buf[7] = buf[8] = buf[9] = buf[10] = buf[11] = 0;
+        rlen = qend;
+      } else {
+        clampTTL(buf, rlen, qend, TTL_CLAMP_S);
+      }
+    }
+  }
+  if (rlen <= 0) {
+    web.send(504, "text/plain", "upstream timeout");
+    return;
+  }
+  web.sendHeader("Cache-Control", "no-store");
+  secHeaders(nullptr);
+  String out; // String(const char*, len) isn't available on ESP8266; append bytes (keeps NULs)
+  out.reserve(rlen);
+  for (int i = 0; i < rlen; i++) out += (char)buf[i];
+  web.send(200, "application/dns-message", out);
+}
 static void handleSetProxy() {
   if (!requireAuth()) return;
   if (web.hasArg("p")) {
-    proxyAddr = web.arg("p");
-    proxyAddr.trim();
+    String p = web.arg("p");
+    p.trim();
+    if (p.length()) { // must be host:port — it is interpolated into the PAC JavaScript
+      int colon = p.lastIndexOf(':');
+      bool bad = colon <= 0 || colon == (int)p.length() - 1 || p.length() > 64 ||
+                 p.substring(colon + 1).toInt() <= 0;
+      for (size_t i = 0; !bad && i < p.length(); i++)
+        if (!isalnum((unsigned char)p[i]) && p[i] != '.' && p[i] != '-' && p[i] != ':' && p[i] != '_') bad = true;
+      if (bad) {
+        web.send(400, "text/plain", "bad proxy: need host:port");
+        return;
+      }
+    }
+    proxyAddr = p;
   }
   saveProxyCfg();
   web.send(200, "text/plain", "ok");
@@ -1946,6 +2417,8 @@ static void handleBlockPage() {
   int colon = host.indexOf(':');
   if (colon > 0) host = host.substring(0, colon);
   const bool custom = isBlockDomain(host.c_str()) || isWildBlock(host.c_str());
+  pagesServed++;                // every HTML page served (denominator for the % protected)
+  if (secLevel > 0) secPages++; // this block page got the privacy rewrite
   String html(BLOCK_TMPL); // PROGMEM template -> SRAM
   html.replace("{{HOST}}", htmlEscape(host));
   html.replace("{{REASON}}", custom ? "custom block rule" : "ad / tracker / malware list");
@@ -1957,12 +2430,23 @@ static void handleBlockPage() {
 }
 // Fires for any path not explicitly routed. If the Host isn't this device, the client
 // was pointed here by a sinkholed A record: show the block page (or, once allowed, a note).
+// The device answers to its own IP, to any "<name>.local", to WIFI_HOST (cfgHost, from
+// /wifi.cfg or secrets.h) and to any /hosts.cfg entry that points back at it. Anything else
+// was pointed here by a sinkholed A record -> block page.
+static bool isDeviceName(const String& h) {
+  if (h == WiFi.localIP().toString() || h.endsWith(".local")) return true;
+  const char* self = cfgHost.length() ? cfgHost.c_str() : WIFI_HOST;
+  if (self && *self && h.equalsIgnoreCase(self)) return true;
+  for (int i = 0; i < numHosts; i++)
+    if (h.equalsIgnoreCase(localHosts[i].name) && localHosts[i].ip == (uint32_t)WiFi.localIP()) return true;
+  return false;
+}
 static bool foreignHost(String& host) {
   host = web.hostHeader();
   int colon = host.indexOf(':');
   if (colon > 0) host = host.substring(0, colon);
   host.toLowerCase();
-  return host.length() && host != WiFi.localIP().toString() && !host.endsWith(".local");
+  return host.length() && !isDeviceName(host);
 }
 static void serveSinkhole(const String& host) {
   if (isBlocked(host.c_str())) {
@@ -1985,7 +2469,7 @@ static void handleRoot() {
     return;
   }
   if (!web.authenticate(WEB_USER, WEB_PASS)) {
-    web.requestAuthentication();
+    askAuth();
     return;
   }
   // Revalidate every load (ETag -> 304, tiny): a dashboard that changes on reflash must not be
@@ -1996,9 +2480,11 @@ static void handleRoot() {
   web.sendHeader("Cache-Control", "no-cache");
   secHeaders(CSP_APP);
   if (web.header("If-None-Match") == etag) {
-    web.send(304, "text/plain", "");
+    web.send(304, "text/plain", ""); // not modified: no body -> don't count a page
     return;
   }
+  pagesServed++;                // every HTML page served (denominator for the % protected)
+  if (secLevel > 0) secPages++; // this dashboard body got the privacy rewrite
   // Chunked (no fixed Content-Length): a declared length can mismatch the body if the send
   // is cut mid-way (big page + busy radio) -> "net::ERR_CONTENT_LENGTH_MISMATCH" on the client.
   web.setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -2006,26 +2492,115 @@ static void handleRoot() {
   web.sendContent_P(PAGE);
   web.sendContent(""); // end the chunked body
 }
+// World map for the destination card. Static and public-domain (Natural Earth), so it is
+// served as a separate cached asset instead of inflating every dashboard response.
+static void handleWorldSvg() {
+  if (!web.authenticate(WEB_USER, WEB_PASS)) {
+    askAuth();
+    return;
+  }
+  char etag[24];
+  snprintf(etag, sizeof(etag), "\"w%u\"", (unsigned)(sizeof(WORLD_SVG) - 1));
+  web.sendHeader("ETag", etag);
+  web.sendHeader("Cache-Control", "public, max-age=86400");
+  web.sendHeader("X-Content-Type-Options", "nosniff");
+  if (web.header("If-None-Match") == etag) {
+    web.send(304, "text/plain", "");
+    return;
+  }
+  web.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  web.send(200, "image/svg+xml", "");
+  web.sendContent_P(WORLD_SVG);
+  web.sendContent("");
+}
 static void handleNotFound() {
   String host;
   if (foreignHost(host)) {
     serveSinkhole(host);
     return;
   }
-  web.send(404, "text/plain", "not found");
-}
+  web.send(404, "text/plain", "not found");}
 
 // ---------- blocklist swap (shared by upload + remote fetch) ----------
+static uint32_t le32(const uint8_t* p) { return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); }
+// Read the 'RGX1' section at `off`: u16 count, then (u16 len + pattern)*. Records longer
+// than RGX_MAXLEN are skipped (past the count cap). Partial section -> keep what loaded.
+static uint32_t loadRegexSection(uint32_t off) { // returns the offset just past 'RGX1'
+  numRgx = 0;
+  if (!blocklist.seek(off)) return off;
+  uint8_t m[4];
+  if (blocklist.read(m, 4) != 4 || m[0] != 'R' || m[1] != 'G' || m[2] != 'X' || m[3] != '1') return off;
+  uint8_t cb[2];
+  if (blocklist.read(cb, 2) != 2) return off;
+  uint16_t count = (uint16_t)(cb[0] | (cb[1] << 8));
+  for (uint16_t i = 0; i < count; i++) {
+    uint8_t lb[2];
+    if (blocklist.read(lb, 2) != 2) break;
+    uint16_t len = (uint16_t)(lb[0] | (lb[1] << 8));
+    if (len == 0 || len >= RGX_MAXLEN || numRgx >= MAX_RGX) { blocklist.seek(blocklist.position() + len); continue; }
+    if (blocklist.read((uint8_t*)rgxPat[numRgx], len) != len) break;
+    rgxPat[numRgx][len] = 0;
+    numRgx++;
+  }
+  return (uint32_t)blocklist.position();
+}
+// 'GAFM' | 5 x (u16 bytes + bitmap): provider Blooms (G/A/F/Amazon/Microsoft) for telemetry.
+static void loadGafamSection(uint32_t off) {
+  gafamOk = false;
+  for (int i = 0; i < 5; i++) { gafamOff[i] = 0; gafamLen[i] = 0; }
+  if (!blocklist.seek(off)) return;
+  uint8_t m[4];
+  if (blocklist.read(m, 4) != 4 || m[0] != 'G' || m[1] != 'A' || m[2] != 'F' || m[3] != 'M') return;
+  uint16_t pos = 0;
+  for (int i = 0; i < 5; i++) {
+    uint8_t lb[2];
+    if (blocklist.read(lb, 2) != 2) return;
+    uint16_t len = (uint16_t)(lb[0] | (lb[1] << 8));
+    if (len == 0 || (int)pos + len > (int)sizeof(gafamBuf)) return;
+    if (blocklist.read(gafamBuf + pos, len) != len) return;
+    gafamOff[i] = pos;
+    gafamLen[i] = len;
+    pos += len;
+  }
+  gafamOk = true;
+}
 static void reopenBlocklist() {
   blocklist = LittleFS.open(BLOCKLIST_PATH, "r");
+  if (!blocklist) blocklist = LittleFS.open("/blocklist.old", "r"); // interrupted swap
   numHashes = 0;
   bloomM = 0;
+  numRgx = 0;
+  bloomBase = BLOCKLIST_HDR;
   if (blocklist) {
     uint8_t hdr[BLOCKLIST_HDR];
-    if (blocklist.read(hdr, BLOCKLIST_HDR) == BLOCKLIST_HDR &&
-        hdr[0] == 'B' && hdr[1] == 'L' && hdr[2] == 'M' && hdr[3] == '1') {
-      numHashes = (uint32_t)hdr[4] | ((uint32_t)hdr[5] << 8) | ((uint32_t)hdr[6] << 16) | ((uint32_t)hdr[7] << 24);
-      bloomM = (uint32_t)((blocklist.size() - BLOCKLIST_HDR) * 8);
+    if (blocklist.read(hdr, BLOCKLIST_HDR) == BLOCKLIST_HDR && hdr[0] == 'B' && hdr[1] == 'L' && hdr[2] == 'M') {
+      numHashes = le32(hdr + 4);
+      if (hdr[3] == '1') {
+        bloomM = (uint32_t)((blocklist.size() - BLOCKLIST_HDR) * 8);
+      } else if (hdr[3] == '2') {
+        uint8_t mb[4];
+        size_t fsz = blocklist.size();
+        if (blocklist.read(mb, 4) == 4) {
+          uint32_t bitmapBytes = le32(mb);
+          bloomBase = BLOCKLIST_HDR + 4;
+          // The declared bitmap must lie inside the file. A bogus/huge value would make
+          // bloomBit() read past EOF (fail-open: blocking silently off) and wrap the RGX1
+          // offset (random bytes parsed as regexes). Reject the whole blob instead.
+          if (bitmapBytes > 0 && (uint64_t)bloomBase + bitmapBytes <= fsz) {
+            bloomM = bitmapBytes * 8;
+            loadGafamSection(loadRegexSection(bloomBase + bitmapBytes)); // 'RGX1' then 'GAFM'
+          } else {
+            Serial.printf("[bloom] BLM2 bitmap out of range (%u bytes, file %u) — blocklist ignored\n",
+                          (unsigned)bitmapBytes, (unsigned)fsz);
+            numHashes = 0;
+            bloomM = 0;
+          }
+        } else {
+          bloomM = 0;
+        }
+      } else {
+        Serial.println("[bloom] bad header — blocklist ignored");
+      }
     } else {
       Serial.println("[bloom] bad header — blocklist ignored");
     }
@@ -2041,15 +2616,21 @@ static bool commitNewBlocklist() { // /blocklist.new -> live (validated)
   File f = LittleFS.open("/blocklist.new", "r");
   size_t sz = f ? f.size() : 0;
   bool ok = false;
-  if (f && sz > BLOCKLIST_HDR) { // validate the 'BLM1' magic before swapping
+  if (f && sz > BLOCKLIST_HDR) { // validate the magic and, for BLM2, the declared bitmap size
     uint8_t hdr[BLOCKLIST_HDR];
-    ok = f.read(hdr, BLOCKLIST_HDR) == BLOCKLIST_HDR && hdr[0] == 'B' && hdr[1] == 'L' && hdr[2] == 'M' && hdr[3] == '1';
+    ok = f.read(hdr, BLOCKLIST_HDR) == BLOCKLIST_HDR && hdr[0] == 'B' && hdr[1] == 'L' && hdr[2] == 'M' && (hdr[3] == '1' || hdr[3] == '2');
+    if (ok && hdr[3] == '2') { // BLM2: the bitmap must fit, else the device would fail open
+      uint8_t mb[4];
+      ok = f.read(mb, 4) == 4 && le32(mb) > 0 && (uint64_t)(BLOCKLIST_HDR + 4) + le32(mb) <= sz;
+    }
   }
   if (f) f.close();
-  if (ok) { // swap: replace the live list (keep it on failure)
+  if (ok) { // swap: keep a recoverable copy until the new file is live
     if (blocklist) blocklist.close();
-    LittleFS.remove(BLOCKLIST_PATH);
+    LittleFS.remove("/blocklist.old");
+    LittleFS.rename(BLOCKLIST_PATH, "/blocklist.old");
     LittleFS.rename("/blocklist.new", BLOCKLIST_PATH);
+    LittleFS.remove("/blocklist.old");
     lastUpdateMs = millis(); // also counts a browser upload as "updated"
   } else {
     LittleFS.remove("/blocklist.new"); // bad/empty download -> keep the live list
@@ -2060,15 +2641,16 @@ static bool commitNewBlocklist() { // /blocklist.new -> live (validated)
 
 // ---------- OTA blocklist update (browser upload) ----------
 static bool upOk = false;
+static bool upWriteOk = false; // every chunk reached the filesystem
 static bool upAuthOk = false;
 static File upFile;
 static void handleUploadDone() {
   if (!upAuthOk) {
-    web.requestAuthentication();
+    askAuth();
     return;
   }
   web.send(upOk ? 200 : 500, "text/plain",
-           upOk ? "ok" : "rejected: not a BLM1 blocklist.bin");
+           upOk ? "ok" : "rejected: not a BLM1/BLM2 blocklist.bin");
 }
 static void handleUpload() {
   HTTPUpload& u = web.upload();
@@ -2082,15 +2664,21 @@ static void handleUpload() {
     upOk = false;
     beginBlocklistSwap();
     upFile = LittleFS.open("/blocklist.new", "w");
+    upWriteOk = (bool)upFile; // a full/failed FS must reject the blob, not silently truncate it
     Serial.printf("[ota] receiving %s\n", u.filename.c_str());
     break;
   case UPLOAD_FILE_WRITE:
-    if (upAuthOk && upFile) upFile.write(u.buf, u.currentSize);
+    if (upAuthOk && upFile && upFile.write(u.buf, u.currentSize) != u.currentSize) upWriteOk = false;
     break;
   case UPLOAD_FILE_END:
     if (!upAuthOk) break;
     if (upFile) upFile.close();
-    upOk = commitNewBlocklist();
+    upOk = upWriteOk && commitNewBlocklist();
+    if (!upWriteOk) { // never hand a truncated blob to the validator
+      LittleFS.remove("/blocklist.new");
+      if (blocklist) blocklist.close();
+      reopenBlocklist();
+    }
     Serial.printf("[ota] %s -> %u domains\n", upOk ? "OK" : "REJECTED", numHashes);
     break;
   case UPLOAD_FILE_ABORTED:
@@ -2105,16 +2693,27 @@ static void handleUpload() {
 
 // ---------- persisted counters (/stats.cfg) + reset ----------
 static uint32_t savedBlocked = 0, savedAllowed = 0, savedCached = 0; // last persisted snapshot
+static uint32_t savedGafam = 0, savedDnssec = 0, savedSecPages = 0, savedPagesServed = 0; // ...GAFM/DNSSEC/pages
 static void loadStats() {
   File f = LittleFS.open("/stats.cfg", "r");
   if (!f) return;
   totalBlocked = f.readStringUntil('\n').toInt();
   totalAllowed = f.readStringUntil('\n').toInt();
   totalCached = f.readStringUntil('\n').toInt();
+  for (int i = 0; i < 6 && f.available(); i++) gafamCnt[i] = (uint32_t)f.readStringUntil('\n').toInt();
+  if (f.available()) dnssecOk = (uint32_t)f.readStringUntil('\n').toInt();
+  if (f.available()) dnssecSeen = (uint32_t)f.readStringUntil('\n').toInt();
+  if (f.available()) secPages = (uint32_t)f.readStringUntil('\n').toInt();
+  if (f.available()) pagesServed = (uint32_t)f.readStringUntil('\n').toInt();
+  if (pagesServed < secPages) pagesServed = secPages; // migration/consistency: denom >= numer
   f.close();
   savedBlocked = totalBlocked;
   savedAllowed = totalAllowed;
   savedCached = totalCached;
+  savedGafam = gafamCnt[0] + gafamCnt[1] + gafamCnt[2] + gafamCnt[3] + gafamCnt[4] + gafamCnt[5];
+  savedDnssec = dnssecSeen;
+  savedSecPages = secPages;
+  savedPagesServed = pagesServed;
 }
 static void saveStats() {
   File f = LittleFS.open("/stats.cfg", "w");
@@ -2122,18 +2721,35 @@ static void saveStats() {
   f.println(totalBlocked);
   f.println(totalAllowed);
   f.println(totalCached);
+  for (int i = 0; i < 6; i++) f.println(gafamCnt[i]); // provider share of allowed lookups
+  f.println(dnssecOk);
+  f.println(dnssecSeen);
+  f.println(secPages);    // pages that got the privacy (header) rewrite
+  f.println(pagesServed); // all pages served (so the % survives reboots)
   f.close();
   savedBlocked = totalBlocked;
   savedAllowed = totalAllowed;
   savedCached = totalCached;
+  savedGafam = gafamCnt[0] + gafamCnt[1] + gafamCnt[2] + gafamCnt[3] + gafamCnt[4] + gafamCnt[5];
+  savedDnssec = dnssecSeen;
+  savedSecPages = secPages;
+  savedPagesServed = pagesServed;
 }
 static void resetStats() {
   totalBlocked = totalAllowed = totalCached = 0;
   dohHits = 0;
+  pacHits = 0;
   for (int i = 0; i < numClients; i++) {
     clients[i].blocked = 0;
     clients[i].allowed = 0;
+    clients[i].pac = 0;
   }
+  for (int i = 0; i < 6; i++) gafamCnt[i] = 0;
+  for (uint16_t i = 0; i < GEO_NCODES; i++) geoHits[i] = 0;
+  geoMapped = 0;
+  dnssecOk = dnssecSeen = 0;
+  secPages = 0;
+  pagesServed = 0;
   evSeq = 0;         // clear the recent-blocked ring too
   lastSyslogSeq = 0; // and reset the syslog cursor (else it underflows after evSeq=0)
   saveStats();
@@ -2142,7 +2758,7 @@ static void resetStats() {
 static bool fwAuthOk = false;
 static void handleFwUpdateDone() {
   if (!fwAuthOk) {
-    web.requestAuthentication();
+    askAuth();
     return;
   }
   bool ok = !Update.hasError();
@@ -2183,6 +2799,23 @@ static void handleFwUpload() {
 #endif
   }
 }
+
+#if !defined(ESP8266)
+// ESP32 bootloader already runs with CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE. The core's
+// default verifyRollbackLater()==false would confirm the new image at boot, before setup()
+// can prove anything; return true so the image stays pending until we confirm it.
+extern "C" bool verifyRollbackLater() { return true; }
+
+// Confirm a freshly flashed image only after 60 s of uptime: a panic/boot loop rolls
+// back automatically (on the next reset), a healthy boot keeps it. No extra partition.
+static bool otaConfirmed = false;
+static void confirmOtaIfSettled() {
+  if (otaConfirmed || millis() < 60000UL) return;
+  otaConfirmed = true;
+  if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK)
+    Serial.println("[ota] image confirmed valid");
+}
+#endif
 
 // ---------- WiFi provisioning (SmartConfig / ESP-Touch) ----------
 // /wifi.cfg is baked into the LittleFS image by tools/gen_config.py. It takes priority
@@ -2834,6 +3467,7 @@ void setup() {
   probeCli.begin(0);
   tcpDns.begin();
   tcpDns.setNoDelay(true); // TCP :53 fallback for truncated UDP replies
+  blackhole.begin();       // drop PAC-routed URL matches (see /proxy.pac)
 #if defined(ESP8266)
   web.collectHeaders(CSRF_HEADER); // ESP8266 variadic overload; a char*[] picks the wrong template
 #else
@@ -2845,6 +3479,7 @@ void setup() {
   web.on("/", handleRoot); // dashboard, or block page for a sinkholed host
   web.on("/stats.json", handleStats);
   web.on("/events", handleEvents);                                    // recent-blocked ring (frontend keeps history)
+  web.on("/world.svg", handleWorldSvg);                               // static map for the destination card
   web.on("/__dnscheck", []() { web.send(200, "text/plain", "ok"); }); // resolver-usage probe (see lookupHost)
   web.on("/allow", handleAllow);                                      // block-page "continue" (CSRF-gated, no Basic auth)
   web.on("/setblock", handleSetBlock);                                // blocked-reply mode (ip/zero/nxdomain)
@@ -2864,6 +3499,9 @@ void setup() {
   });
   web.on("/setsyslog", handleSetSyslog);     // remote syslog host/port
   web.on("/proxy.pac", HTTP_GET, handlePac); // auto-proxy config (no auth: OS/browser fetch)
+  web.on("/wpad.dat", HTTP_GET, handlePac);  // WPAD alias (DNS answers "wpad" -> this device)
+  web.on("/dns-query", HTTP_GET, handleDoh); // DoH (RFC 8484) over plain HTTP; no TLS
+  web.on("/dns-query", HTTP_POST, handleDoh);
   web.on("/setproxy", handleSetProxy);       // set the PAC proxy (host:port)
   web.on("/sethost", handleSetHost);         // local DNS record add/replace
   web.on("/delhost", handleDelHost);         // local DNS record remove
@@ -2970,6 +3608,9 @@ void loop() {
   _prev = _l;
   ArduinoOTA.handle();
   wifiWatchdog();
+#if !defined(ESP8266)
+  confirmOtaIfSettled();
+#endif
   uint32_t _d0 = micros();
   bool busy = handleDns(); // DNS first (latency-sensitive)
   uint32_t _dd = micros() - _d0;
@@ -2978,6 +3619,7 @@ void loop() {
   probeDnsTick();                                      // non-blocking latency sweep (own UDP socket)
   applyDnsSwitch();                                    // only when nothing is in flight
   handleTcpDns();                                      // TCP :53 fallback (rare; blocking, see note)
+  handleBlackhole();                                   // drop PAC-routed URL matches
   if (!busy || (uint32_t)(millis() - lastWeb) > 100) { // web only when idle (anti-starvation cap)
     lastWeb = millis();
     uint32_t _w0 = micros();
@@ -2997,7 +3639,11 @@ void loop() {
   static uint32_t lastStatsSave = 0; // persist counters every ~5 min (only if changed)
   if ((uint32_t)(millis() - lastStatsSave) >= 300000UL) {
     lastStatsSave = millis();
-    if (totalBlocked != savedBlocked || totalAllowed != savedAllowed || totalCached != savedCached) saveStats();
+    uint32_t gsum = gafamCnt[0] + gafamCnt[1] + gafamCnt[2] + gafamCnt[3] + gafamCnt[4] + gafamCnt[5];
+    if (totalBlocked != savedBlocked || totalAllowed != savedAllowed || totalCached != savedCached ||
+        gsum != savedGafam || dnssecSeen != savedDnssec || secPages != savedSecPages ||
+        pagesServed != savedPagesServed)
+      saveStats();
   }
   if (ledUntil && (int32_t)(millis() - ledUntil) >= 0) {
     digitalWrite(LED_PIN, LED_OFF);

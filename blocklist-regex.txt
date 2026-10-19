@@ -1,0 +1,13 @@
+# Hostname regexes for the BLM2 section (one per line, '#' = comment).
+# Engine subset: literals, '.', '*', '+', '?', '[abc]'/'[^abc]', '\' escape,
+# '^'/'$' anchors, top-level '|'. Case-insensitive, unanchored search.
+# '^host$' pins an exact host; subdomains are covered by the suffix walk.
+^s\.youtube\.com$
+^udc\.yahoo\.com$
+^eu\.posthog\.com$
+^us\.i\.posthog\.com$
+^siftscience\.com$
+^bnc\.lt$
+^cookiebot\.com$
+^cdn\.privacy-mgmt\.com$
+^clientstream\.launchdarkly\.com$

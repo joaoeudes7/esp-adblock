@@ -9,7 +9,7 @@
 # VS Code workspace file
 *.code-workspace
 
-# Generated blocklist (build it with tools/build_bloom.py)
+# Generated blocklist (build it with tools/build_bin_list_block.py)
 data/blocklist.bin
 
 # Generated local config (from config.env). data/wifi.cfg holds WiFi credentials — never commit.
