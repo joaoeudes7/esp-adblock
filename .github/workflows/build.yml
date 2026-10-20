@@ -58,20 +58,26 @@ jobs:
             echo "::endgroup::"
           done
           exit $status
-      # The parallel build above runs in ../fw-<env> worktrees. Publish what CI compiled so
-      # a run can be downloaded/flashed without rebuilding (the web installer under
-      # installer/fw is a separate, versioned release artifact).
+      # The parallel build above runs in ../fw-<env> worktrees. upload-artifact rejects paths
+      # outside the workspace (and any `..`), so collect the binaries under dist/ first.
+      # Publish what CI compiled so a run can be downloaded/flashed without rebuilding (the
+      # web installer under installer/fw is a separate, versioned release artifact).
+      - name: Collect firmware artifacts
+        if: always()
+        run: |
+          mkdir -p dist
+          for env in esp8266 c3 esp32dev esp32s3; do
+            src="../fw-$env/.pio/build/$env/firmware.bin"
+            if [ -f "$src" ]; then cp "$src" "dist/$env-firmware.bin"; fi
+          done
+          ls -l dist
       - name: Upload firmware artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: firmware
           if-no-files-found: warn
-          path: |
-            ../fw-esp8266/.pio/build/esp8266/firmware.bin
-            ../fw-c3/.pio/build/c3/firmware.bin
-            ../fw-esp32dev/.pio/build/esp32dev/firmware.bin
-            ../fw-esp32s3/.pio/build/esp32s3/firmware.bin
+          path: dist/*.bin
 
   blocklist-tool:
     runs-on: ubuntu-24.04
