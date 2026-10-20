@@ -18,10 +18,18 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+          # pip's wheel/metadata cache; the key follows the PlatformIO config.
+          cache: pip
+          cache-dependency-path: platformio.ini
+      # Toolchains + frameworks + PlatformIO core (~hundreds of MB). `restore-keys`
+      # keeps the previous cache when platformio.ini changes, so only the delta is
+      # downloaded instead of the whole espressif32 platform/toolchain.
       - uses: actions/cache@v6
         with:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-
       # intelhex is imported by the bundled tool-esptoolpy but is no longer a
       # PlatformIO dependency; the ESP32 targets fail without it.
       - run: pip install -U platformio intelhex
