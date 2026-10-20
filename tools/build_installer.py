@@ -29,8 +29,11 @@ PIO_CORE = os.environ.get("PLATFORMIO_CORE_DIR", os.path.expanduser("~/.platform
 BOOT_APP0 = glob.glob(os.path.join(PIO_CORE, "packages", "framework-arduinoespressif32",
                                    "tools", "partitions", "boot_app0.bin"))
 
-# ESP32 partitions: bootloader/partition-table/ota-data/app/FS offsets come from partitions.csv.
-# ESP8266 (`eagle.flash.4m2m.ld`): app at 0x0, 2 MB LittleFS at 0x200000.
+# ESP32 partitions: bootloader/partition-table are chip-fixed; ota-data/app/FS offsets are
+# named partition-table entries resolved from partitions.csv at build time (so a layout
+# change cannot leave a stale offset here — flashing the FS to the wrong offset boots an
+# empty filesystem, i.e. no blocklist). ESP8266 (`eagle.flash.4m2m.ld`) has no partition
+# table: app at 0x0, 2 MB LittleFS at 0x200000.
 # `chipFamily` mirrors the ESP Web Tools manifest convention.
 BOARDS = {
     "esp8266": {
@@ -44,9 +47,9 @@ BOARDS = {
         "parts": [
             ("bootloader.bin", 0x001000),
             ("partitions.bin", 0x008000),
-            ("boot_app0.bin", 0x00E000),
-            ("firmware.bin", 0x010000),
-            ("littlefs.bin", 0x2B0000),
+            ("boot_app0.bin", "otadata"),
+            ("firmware.bin", "app0"),
+            ("littlefs.bin", "spiffs"),
         ],
     },
     "c3": {
@@ -55,20 +58,20 @@ BOARDS = {
         "parts": [
             ("bootloader.bin", 0x000000),
             ("partitions.bin", 0x008000),
-            ("boot_app0.bin", 0x00E000),
-            ("firmware.bin", 0x010000),
-            ("littlefs.bin", 0x2B0000),
+            ("boot_app0.bin", "otadata"),
+            ("firmware.bin", "app0"),
+            ("littlefs.bin", "spiffs"),
         ],
     },
     "esp32s3": {
         "label": "ESP32-S3 (4 MB)",
         "chipFamily": "ESP32-S3",
         "parts": [
-            ("bootloader.bin", 0x000000),
+            ("bootloader.bin", 0x001000),
             ("partitions.bin", 0x008000),
-            ("boot_app0.bin", 0x00E000),
-            ("firmware.bin", 0x010000),
-            ("littlefs.bin", 0x2B0000),
+            ("boot_app0.bin", "otadata"),
+            ("firmware.bin", "app0"),
+            ("littlefs.bin", "spiffs"),
         ],
     },
 }
@@ -151,6 +154,11 @@ def main():
     for env, meta in BOARDS.items():
         parts = []
         for name, offset in meta["parts"]:
+            if isinstance(offset, str):   # named partition-table entry in partitions.csv
+                if offset not in parts_csv:
+                    raise SystemExit("[installer] %s/%s: partitions.csv has no '%s' entry"
+                                     % (env, name, offset))
+                offset = parts_csv[offset][0]
             src = part_source(env, name)
             if not src or not os.path.exists(src):
                 continue

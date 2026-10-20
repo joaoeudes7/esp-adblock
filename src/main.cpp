@@ -71,6 +71,7 @@ private:
 #include <Update.h>      // firmware OTA
 #include <ArduinoOTA.h>  // network firmware flashing (pio run over wifi)
 #include <Preferences.h> // NVS store for provisioned WiFi creds
+#include <esp_system.h>  // esp_reset_reason() for the persisted boot record
 #if !defined(ESP8266)
 #include <esp_ota_ops.h> // rollback confirm (ESP32 bootloader has it enabled)
 #endif
@@ -79,6 +80,15 @@ private:
 static inline uint32_t rnd32() { return esp_random(); }
 #endif
 
+// ESP32 core 3.x deprecated NetworkUDP::flush() in favour of clear(); older cores still use flush().
+static inline void udpDrop(WiFiUDP& u) {
+#if defined(ESP8266) || !defined(ESP_ARDUINO_VERSION_MAJOR) || ESP_ARDUINO_VERSION_MAJOR < 3
+  u.flush();
+#else
+  u.clear();
+#endif
+}
+
 #if !defined(ESP8266)
 #include "lwip/etharp.h"
 #include "lwip/netif.h"
@@ -86,7 +96,9 @@ static inline uint32_t rnd32() { return esp_random(); }
 ADC_MODE(ADC_VCC); // route the ADC to read the chip supply (brownout diagnosis)
 #endif
 
-#include "geo_table.h" // /14 IPv4 -> country byte (tools/build_geo_table.py)
+#include "concurrency.h" // cooperative helpers: TcpRelay (TCP :53) + DeferredFlag
+#include "geo_table.h"   // /14 IPv4 -> country byte (tools/build_geo_table.py)
+#include "boot_debug.h"  // optional boot/crash record (-D BOOT_DEBUG=1); no-op stubs otherwise
 
 // Firmware version — shown on the dashboard + /stats.json.
 // Override at build time with: build_flags = -D FW_VERSION='"1.2.3"'
@@ -206,8 +218,29 @@ uint32_t dohHits = 0;     // client queries for known encrypted-DNS (DoH/DoT) en
 uint32_t pacHits = 0;     // requests received on the black-hole port (a client is using the PAC)
 // hot-path counters (diagnostics): flash probes and cache behaviour per query
 uint32_t stQueries = 0, stBlkChecks = 0, stBlkHits = 0, stBloomSeeks = 0, stRespCached = 0;
-uint32_t stMaxGap = 0, stMaxWeb = 0, stMaxDns = 0; // worst-case (µs): loop-iteration gap / web / dns handling
+uint32_t stMaxGap = 0, stMaxWeb = 0, stMaxDns = 0, stMaxTcp = 0; // worst-case (µs): loop gap / web / dns / tcp fallback
+// Pre-OOM breadcrumb: the lowest free heap seen since boot + what was running at that moment.
+// Without it a burst that nearly OOM'd leaves no trace at all (String just truncates).
+uint32_t stMinHeap = 0xFFFFFFFF, stMinHeapAt = 0; // value + uptime (ms) of the low point
+uint8_t stMinHeapCtx = 0;                          // 1 = web handler, 2 = DNS path
+
+static uint32_t bootId = 0; // increments every boot so open dashboards reload
+
+static inline void noteHeap(uint8_t ctx) {
+  uint32_t h = ESP.getFreeHeap();
+  if (h < stMinHeap) {
+    stMinHeap = h;
+    stMinHeapAt = millis();
+    stMinHeapCtx = ctx;
+    bootDbgNoteHeap(h, ctx); // no-op unless BOOT_DEBUG: keeps the crash record's watermark current
+  }
+}
 uint8_t buf[1536];                                 // fits any non-fragmented UDP reply (EDNS answers can exceed 512)
+// TCP :53 has its own buffer: `buf` is reused by handleDns() every loop, so a job cannot
+// keep a pointer into it across yields. Single-owner: only loop() drives it.
+static uint8_t tcpBuf[1536];
+static cc::TcpRelay tcpRelay;
+static cc::DeferredFlag statsSaveReq; // dirty flag consumed by loop() when idle
 
 // Bloom filter: the bitmap lives in flash (after an 8-byte header), so RAM use is
 // O(1) in the number of blocked domains — that is the whole point vs the old
@@ -260,6 +293,7 @@ struct BlockEv {
   uint32_t ts;
   uint32_t cip;
   char host[48];
+  uint16_t count; // burst strategy: repeats of the same host fold into one entry
 };
 static BlockEv evRing[EV_N];
 static uint32_t evSeq = 0;
@@ -276,11 +310,11 @@ static uint32_t pagesServed = 0; // all HTML pages served (denominator) -> % pro
 static uint8_t secHdrCount(uint8_t lv) { return lv >= 3 ? 10 : lv >= 2 ? 8
                                                            : lv >= 1   ? 3
                                                                        : 0; }
-// Boot id: increments every boot (persisted) so open dashboards can tell a reboot happened.
-static uint32_t bootId = 0;
-
 // Blocked-reply mode (configurable): 0 = ESP IP (block page), 1 = 0.0.0.0, 2 = NXDOMAIN.
 static uint8_t blockMode = BLOCK_MODE_IP;
+// TTL (seconds) of a blocked answer -> how long clients cache "this host is blocked"
+// before asking again. 0 = no caching (a pause/resume takes effect on the next query).
+static uint32_t blockTtl = 30;
 // IPv4-only: strip AAAA (return NODATA) so clients that use this resolver stay on IPv4.
 static bool ipv4Only = true;
 // Keyword heuristic (opt-in): block hosts whose labels match common ad/tracker tokens.
@@ -798,6 +832,8 @@ static void loadBlockCfg() {
   s.trim();
   String p = f.readStringUntil('\n');
   p.trim();
+  String t = f.readStringUntil('\n'); // absent in older files -> keep the default
+  t.trim();
   f.close();
   blockMode = (m == "zero") ? BLOCK_MODE_ZERO : (m == "nxdomain") ? BLOCK_MODE_NX
                                                                   : BLOCK_MODE_IP;
@@ -806,6 +842,7 @@ static void loadBlockCfg() {
   rebindGuard = (r == "1");
   safeSearchMask = (uint8_t)(s.toInt() & 0xF);
   if (p.length()) secLevel = (uint8_t)constrain(p.toInt(), 0, 3); // absent in older files -> baked default
+  if (t.length()) blockTtl = (uint32_t)constrain(t.toInt(), 0, 86400);
 }
 static void saveBlockCfg() {
   File f = LittleFS.open("/block.cfg", "w");
@@ -817,6 +854,7 @@ static void saveBlockCfg() {
   f.println(rebindGuard ? "1" : "0");
   f.println(safeSearchMask);
   f.println(secLevel);
+  f.println(blockTtl);
   f.close();
 }
 
@@ -836,69 +874,11 @@ static void saveProxyCfg() {
   f.close();
 }
 
-// ---------- remote syslog (/syslog.cfg: host\nport) — history off-device ----------
-WiFiUDP syslogCli;
-static String syslogHost;
-static uint16_t syslogPort = 514;
-static bool syslogReady = false;
-static void loadSyslogCfg() {
-  File f = LittleFS.open("/syslog.cfg", "r");
-  if (!f) return;
-  syslogHost = f.readStringUntil('\n');
-  syslogHost.trim();
-  String p = f.readStringUntil('\n');
-  p.trim();
-  if (p.length()) syslogPort = p.toInt();
-  f.close();
-  if (syslogHost.length() && !syslogReady) {
-    syslogCli.begin(0);
-    syslogReady = true;
-  }
-}
-static void saveSyslogCfg() {
-  File f = LittleFS.open("/syslog.cfg", "w");
-  if (!f) return;
-  f.println(syslogHost);
-  f.println(syslogPort);
-  f.close();
-}
-// Lazy, idle-only batching: don't touch the socket while any query is in flight.
+// True when no UDP query is awaiting an upstream reply (gates flash writes to idle time).
 static bool dnsIdle() {
   for (int i = 0; i < INFLIGHT_N; i++)
     if (inflight[i].used) return false;
   return true;
-}
-static uint32_t lastSyslogSeq = 0, lastFlush = 0;
-static void flushSyslogLazy(bool idle) {
-  if (!syslogReady || !syslogHost.length()) return;
-  uint32_t pending = evSeq - lastSyslogSeq;
-  if (pending == 0) return;
-  if (idle && dnsIdle()) {
-    uint32_t now = millis();
-    if (now - lastFlush < 500) return; // idle: at most every 0.5s
-    lastFlush = now;
-  } else if (pending < (uint32_t)(EV_N - 2)) {
-    return; // busy: wait, unless the ring is about to overwrite
-  }
-  // At most 16 events per datagram; anything beyond that is flushed on the next round
-  // (lastSyslogSeq tracks the LAST SENT, so pending events are never skipped).
-  uint32_t oldest = (evSeq > EV_N) ? (evSeq - EV_N + 1) : 1;
-  uint32_t from = lastSyslogSeq + 1;
-  if (from < oldest) from = oldest;
-  String m;
-  int cnt = 0;
-  for (uint32_t s = from; s <= evSeq && cnt < 16; s++) {
-    BlockEv& e = evRing[s % EV_N];
-    if (e.seq != s) continue;
-    m += "<134>1 ESP-ADBlock - - - blocked=" + String(e.host) + " client=" + IPAddress(e.cip).toString() + "\n";
-    lastSyslogSeq = s;
-    cnt++;
-  }
-  if (cnt) {
-    syslogCli.beginPacket(syslogHost.c_str(), syslogPort);
-    syslogCli.write((const uint8_t*)m.c_str(), m.length());
-    syslogCli.endPacket();
-  }
 }
 
 // ---------- upstream selection (/dns.cfg: one IPv4 per line) ----------
@@ -1045,7 +1025,7 @@ static void probeDnsTick() {
       uint32_t from = (uint32_t)probeCli.remoteIP(); // capture before read/flush
       uint8_t h[96];
       int n = probeCli.read(h, sizeof(h));
-      probeCli.flush();
+      udpDrop(probeCli);
       if (n >= 12 && from == (uint32_t)dnsList[dnsProbePos] &&
           (((h[0] << 8) | h[1]) == dnsProbeWid) && (h[2] & 0x80)) {
         uint32_t r = now - dnsProbeSent;
@@ -1055,7 +1035,7 @@ static void probeDnsTick() {
         dnsProbePos = -1;
       }
     } else if (now - dnsProbeSent > DNS_PROBE_TIMEOUT_MS) {
-      probeCli.flush();
+      udpDrop(probeCli);
       dnsProbeFails++;
       int i = dnsProbePos;
       if (dnsFails[i] < 255) dnsFails[i]++;
@@ -1261,6 +1241,15 @@ static Dev* getClient(uint32_t ip) {
   if (macZero(c->mac)) requestMac(ip);
   return c;
 }
+// A paused scope must disable EVERY blocking path (direct DNS, CNAME cloaking, block
+// page, PAC url rules), not just the isBlocked() call in localAnswer().
+static inline bool clientPaused(uint32_t ip) {
+  for (int i = 0; i < numClients; i++)
+    if (clients[i].ip == ip)
+      return clients[i].pausedUntil && (int32_t)(clients[i].pausedUntil - millis()) > 0;
+  return false;
+}
+static inline bool blockingActiveFor(uint32_t ip) { return blockingOn && !clientPaused(ip); }
 
 // ---------- DNS ----------
 // Authoritative A answer for a local record (non-A -> NOERROR/NODATA).
@@ -1342,12 +1331,25 @@ static bool answerHasPrivateIP(const uint8_t* p, int n, int qend) {
   return false;
 }
 // Record a blocked lookup in the ring (frontend polls it). Cheap: no string history kept.
+// Burst strategy: a host already in the ring (last 10 s) folds into its entry (count++) and is
+// re-stamped as the newest, so a flood of one host cannot evict the other 15 slots — and the
+// client, polling by cursor, re-reads it with the updated count instead of 500 duplicates.
 static void pushBlocked(const char* host, uint32_t cip) {
+  uint16_t count = 1;
+  for (int i = 0; i < EV_N; i++) {
+    BlockEv& o = evRing[i];
+    if (!o.seq || strcmp(o.host, host) != 0) continue;
+    if ((uint32_t)(millis() - o.ts) > 10000UL) continue; // stale: keep as separate history
+    if (o.count < 0xFFFE) count = o.count + 1;
+    o.seq = 0; // vacated: the new head carries the folded count
+    break;
+  }
   evSeq++;
   BlockEv& e = evRing[evSeq % EV_N];
   e.seq = evSeq;
   e.ts = millis();
   e.cip = cip;
+  e.count = count;
   strncpy(e.host, host, sizeof(e.host) - 1);
   e.host[sizeof(e.host) - 1] = 0;
 }
@@ -1391,7 +1393,9 @@ static int buildBlocked(int qend, uint16_t qtype) {
   buf[11] = 0;
   if (qtype != 1) return qend;
   IPAddress ip = (blockMode == BLOCK_MODE_ZERO) ? IPAddress(0, 0, 0, 0) : WiFi.localIP();
-  const uint8_t ans[] = {0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, 0x1E, 0, 4, ip[0], ip[1], ip[2], ip[3]};
+  const uint8_t ans[] = {0xC0, 0x0C, 0, 1, 0, 1,
+                         (uint8_t)(blockTtl >> 24), (uint8_t)(blockTtl >> 16), (uint8_t)(blockTtl >> 8), (uint8_t)blockTtl,
+                         0, 4, ip[0], ip[1], ip[2], ip[3]};
   if (qend + (int)sizeof(ans) > (int)sizeof(buf)) return qend;
   memcpy(buf + qend, ans, sizeof(ans));
   return qend + sizeof(ans);
@@ -1578,11 +1582,11 @@ static void pollUpstream() {
     int sz = upstreamCli.parsePacket();
     if (sz <= 0) break;
     if (!(upstreamCli.remoteIP() == upstreamIP && upstreamCli.remotePort() == UPSTREAM_PORT)) {
-      upstreamCli.flush();
+      udpDrop(upstreamCli);
       continue;
     }
     int n = upstreamCli.read(buf, sizeof(buf));
-    upstreamCli.flush();
+    udpDrop(upstreamCli);
     if (n < 12 || sz > (int)sizeof(buf)) continue;
     uint16_t wid = (buf[0] << 8) | buf[1];
     int slot = -1;
@@ -1627,7 +1631,9 @@ static void pollUpstream() {
       continue;
     }
     char cn[256];
-    if (cnameBlocked(buf, n, f.qend, cn, sizeof(cn))) { // CNAME cloaking: target is blocklisted
+    // Pause scopes apply here too: a paused client (or a global pause) must not get a
+    // CNAME-cloaked answer rewritten into a block.
+    if (blockingActiveFor(f.cip) && cnameBlocked(buf, n, f.qend, cn, sizeof(cn))) { // CNAME cloaking: target is blocklisted
       // Answer with the normal block path so BLOCK_MODE (ip / zero / nxdomain) is honoured.
       buf[0] = f.cid >> 8; // restore the client's transaction id
       buf[1] = f.cid & 0xFF;
@@ -1811,89 +1817,27 @@ static bool handleDns() {
 
 // TCP :53 fallback. A client retries over TCP when a UDP reply sets the TC (truncated) bit
 // — large/EDNS answers — and some query TCP directly. Today the UDP forwarder relays TC=1
-// as-is, so without this the retry would fail. Rare and short, so this path is synchronous
-// (the loop can stall for one upstream RTT).
-// ponytail: blocking TCP :53; make it non-blocking if TCP ever becomes a hot path.
-static int tcpForward(int qlen) {
-  WiFiClient up;
-  up.setTimeout(2); // ms per read
-  if (!up.connect(upstreamIP, DNS_PORT)) return 0;
-  const uint8_t lh[2] = {(uint8_t)(qlen >> 8), (uint8_t)(qlen & 0xFF)};
-  up.write(lh, 2);
-  up.write(buf, qlen);
-  uint8_t lb[2];
-  int got = 0;
-  const uint32_t t0 = millis();
-  while (got < 2 && (uint32_t)(millis() - t0) < 2000) {
-    int r = up.read(lb + got, 2 - got);
-    if (r > 0) got += r;
-    else if (!up.connected()) break;
-  }
-  if (got != 2) {
-    up.stop();
-    return 0;
-  }
-  int n = (lb[0] << 8) | lb[1];
-  if (n < 12 || n > (int)sizeof(buf)) {
-    up.stop();
-    return 0;
-  }
-  got = 0;
-  while (got < n && (uint32_t)(millis() - t0) < 2000) {
-    int r = up.read(buf + got, n - got);
-    if (r > 0) got += r;
-    else if (!up.connected()) break;
-  }
-  up.stop();
-  return got == n ? n : 0;
-}
-static void handleTcpDns() {
-  WiFiClient cli = tcpDns.accept();
-  if (!cli) return;
-  cli.setTimeout(2);
-  const uint32_t t0 = millis();
-  uint8_t lb[2];
-  int got = 0;
-  while (got < 2 && (uint32_t)(millis() - t0) < 2000) { // 2-byte length prefix
-    int r = cli.read(lb + got, 2 - got);
-    if (r > 0) got += r;
-    else if (!cli.connected()) break;
-  }
-  if (got != 2) {
-    cli.stop();
-    return;
-  }
-  int qlen = (lb[0] << 8) | lb[1];
-  if (qlen < 13 || qlen > (int)sizeof(buf)) {
-    cli.stop();
-    return;
-  }
-  got = 0;
-  while (got < qlen && (uint32_t)(millis() - t0) < 2000) { // the query
-    int r = cli.read(buf + got, qlen - got);
-    if (r > 0) got += r;
-    else if (!cli.connected()) break;
-  }
-  if (got != qlen) {
-    cli.stop();
-    return;
-  }
+// as-is, so without this the retry would fail. The state machine lives in concurrency.h
+// (single-owner, driven by loop()); only the upstream connect() is still bounded-blocking.
+static int tcpResolve(void* user, const IPAddress& peer, uint8_t* msg, int len, int* qend) {
+  (void)user;
+  // localAnswer()/buildAnswer()/buildBlocked() write to the shared DNS scratch buffer
+  // (`buf`), not to the relay's. Copy in/out: without this a locally-answered TCP query
+  // would send the query bytes back. The whole call is one poll() step, so no yield.
+  if (len <= 0 || len > (int)sizeof(buf)) return -1;
+  memcpy(buf, msg, len);
   char domain[256];
   uint16_t qtype = 0;
-  int qend = qlen;
-  size_t dl = parseQuery(buf, qlen, domain, &qtype, &qend);
-  uint32_t cip = (uint32_t)cli.remoteIP();
-  int rlen = localAnswer(getClient(cip), cip, domain, dl, qtype, qend);
-  if (rlen == 0) {
-    rlen = tcpForward(qlen);
-    if (rlen > 0) noteGeo(buf, rlen, qend);
-  }
-  if (rlen > 0) { // length-prefixed reply
-    const uint8_t lh[2] = {(uint8_t)(rlen >> 8), (uint8_t)(rlen & 0xFF)};
-    cli.write(lh, 2);
-    cli.write(buf, rlen);
-  }
-  cli.stop();
+  int qe = len;
+  size_t dl = parseQuery(buf, len, domain, &qtype, &qe);
+  *qend = qe;
+  int rlen = localAnswer(getClient((uint32_t)peer), (uint32_t)peer, domain, dl, qtype, qe);
+  if (rlen > 0 && rlen <= (int)sizeof(buf)) memcpy(msg, buf, rlen);
+  return rlen;
+}
+static void tcpReplied(void* user, uint8_t* msg, int len, int qend, bool forwarded) {
+  (void)user;
+  if (forwarded) noteGeo(msg, len, qend); // relayed answers keep the query's question offset
 }
 // Accept a PAC-routed URL and drop it at once: the resource (HTTP) or its TLS CONNECT
 // (HTTPS) fails to complete, so the client treats it as blocked. No content is served, so
@@ -2082,7 +2026,8 @@ static void handleStats() {
   snprintf(ut, sizeof(ut), "%lud %luh %lum", (unsigned long)(up / 86400), (unsigned long)((up % 86400) / 3600), (unsigned long)((up % 3600) / 60));
   String j;
   j.reserve(4096); // clients[] + rules + events can exceed 1200; avoid realloc/fragmentation
-  j = "{\"ip\":\"" + WiFi.localIP().toString() + "\",\"ver\":\"" + FW_VERSION + "\",\"upstream\":\"" + upstreamIP.toString() + "\",\"boot\":" + bootId + ",\"pl\":" + secLevel + ",\"ph\":" + secHdrCount(secLevel) + ",\"php\":" + secPages + ",\"psv\":" + pagesServed + ",\"pht\":" + SEC_HDR_TOTAL + ",\"doh\":" + dohHits + ",\"pac\":" + pacHits +
+  j = "{\"ip\":\"" + WiFi.localIP().toString() + "\",\"ver\":\"" + FW_VERSION + "\",\"upstream\":\"" + upstreamIP.toString() + "\",\"boot\":" + bootId +
+      ",\"pl\":" + secLevel + ",\"ph\":" + secHdrCount(secLevel) + ",\"php\":" + secPages + ",\"psv\":" + pagesServed + ",\"pht\":" + SEC_HDR_TOTAL + ",\"doh\":" + dohHits + ",\"pac\":" + pacHits +
         ",\"gafam\":[" + gafamCnt[0] + "," + gafamCnt[1] + "," + gafamCnt[2] + "," + gafamCnt[3] + "," + gafamCnt[4] + "," + gafamCnt[5] + "]" +
         ",\"dnss\":[" + dnssecOk + "," + dnssecSeen + "]" + ",\"blocked\":" + totalBlocked + ",\"allowed\":" + totalAllowed + ",\"cached\":" + totalCached +
       ",\"domains\":" + numHashes + ",\"rssi\":" + WiFi.RSSI() + ",\"temp\":" + String(temperatureRead(), 1) +
@@ -2113,12 +2058,15 @@ static void handleStats() {
   j += geoMapped;
   j += ",\"pf\":" + String(dnsProbeFails) + ",\"dq\":" + stQueries + ",\"bc\":" + stBlkChecks + ",\"bch\":" + stBlkHits + ",\"bs\":" + stBloomSeeks + ",\"rc\":" + stRespCached +
        ",\"lg\":" + (stMaxGap / 1000) + ",\"lw\":" + (stMaxWeb / 1000) + ",\"ld\":" + (stMaxDns / 1000) +
-       ",\"heap\":" + ESP.getFreeHeap() + ",\"uptime\":\"" + ut + "\"" +
+       ",\"lt\":" + (stMaxTcp / 1000) +
+       ",\"heap\":" + ESP.getFreeHeap() +
+       ",\"hmin\":" + (stMinHeap == 0xFFFFFFFF ? 0 : stMinHeap) + ",\"hup\":" + (stMinHeapAt / 1000) +
+       ",\"hctx\":" + stMinHeapCtx + ",\"uptime\":\"" + ut + "\"" +
        ",\"upat\":" + (lastUpdateMs ? (uint32_t)((millis() - lastUpdateMs) / 1000) : 0) +
        ",\"blocking\":" + (blockingOn ? "true" : "false") +
        ",\"resumeIn\":" + (uint32_t)(!blockingOn && resumeAt ? (resumeAt - millis()) / 1000 : 0) +
        ",\"defcreds\":" + (strcmp(WEB_PASS, "change-me-please") == 0 ? "true" : "false") +
-       ",\"bmode\":" + blockMode + ",\"v4only\":" + (ipv4Only ? "true" : "false") + ",\"kw\":" + (keywordBlock ? "true" : "false") + ",\"rb\":" + (rebindGuard ? "true" : "false") + ",\"ss\":" + safeSearchMask + ",\"syslog\":\"" + jesc(syslogHost) + "\",\"sysport\":" + syslogPort + ",\"ssid\":\"" + jesc(WiFi.SSID()) + "\",\"proxy\":\"" + jesc(proxyAddr) + "\"" +
+       ",\"bmode\":" + blockMode + ",\"bttl\":" + blockTtl + ",\"v4only\":" + (ipv4Only ? "true" : "false") + ",\"kw\":" + (keywordBlock ? "true" : "false") + ",\"rb\":" + (rebindGuard ? "true" : "false") + ",\"ss\":" + safeSearchMask + ",\"ssid\":\"" + jesc(WiFi.SSID()) + "\",\"proxy\":\"" + jesc(proxyAddr) + "\"" +
        ",\"clients\":[";
   for (int i = 0; i < numClients; i++) {
     Dev& c = clients[i];
@@ -2162,19 +2110,10 @@ static void handleStats() {
       j += "{\"n\":\"" + jesc(String(localHosts[i].name)) + "\",\"ip\":\"" + ip.toString() + "\"}";
     }
   }
-  j += "],\"ev\":[";
-  {
-    uint32_t oldest = (evSeq > EV_N) ? (evSeq - EV_N + 1) : 1;
-    bool f2 = true;
-    for (uint32_t s = oldest; s <= evSeq; s++) {
-      BlockEv& e = evRing[s % EV_N];
-      if (e.seq != s) continue;
-      j += (f2 ? "" : ",");
-      f2 = false;
-      j += "{\"seq\":" + String(e.seq) + ",\"host\":\"" + jesc(String(e.host)) + "\",\"cip\":\"" + IPAddress(e.cip).toString() + "\"" + ipClientExtra(e.cip) + ",\"gaf\":" + gafamOf(e.host) + "}";
-    }
-  }
-  j += "]}";
+  j += "],\"evSeq\":" + String(evSeq);
+  bootDbgAddJson(j); // bt/nt/rst/prev.* only in a BOOT_DEBUG build
+  j += "}";
+  noteHeap(1); // peak of the biggest per-request allocation (this JSON): pre-OOM breadcrumb
   web.send(200, "application/json", j);
 }
 // Recent-blocked events since a cursor. The dashboard polls this (~2 s) and keeps the
@@ -2188,18 +2127,36 @@ static void handleEvents() {
   secHeaders(nullptr);
   uint32_t since = web.hasArg("since") ? (uint32_t)web.arg("since").toInt() : 0;
   uint32_t oldest = (evSeq > EV_N) ? (evSeq - EV_N + 1) : 1;
-  uint32_t from = since + 1;
-  if (from < oldest) from = oldest;
-  String j = "{\"last\":" + String(evSeq) + ",\"ev\":[";
+  uint32_t from = since + 1, skipped = 0;
+  if (from < oldest) { // the client fell behind the ring: say how much was lost, resume at oldest
+    skipped = oldest - from;
+    from = oldest;
+  }
+  String j;
+  j.reserve(64 + EV_N * 128); // bounded: one page of at most EV_N events, no realloc
+  j += "{\"last\":";
+  j += skipped ? from - 1 : since;
+  j += ",\"ev\":[";
   bool first = true;
-  for (uint32_t s = from; s <= evSeq; s++) {
+  uint32_t last = skipped ? from - 1 : since;
+  int n = 0;
+  for (uint32_t s = from; s <= evSeq && n < EV_N; s++) {
     BlockEv& e = evRing[s % EV_N];
     if (e.seq != s) continue;
     j += (first ? "" : ",");
     first = false;
-    j += "{\"seq\":" + String(e.seq) + ",\"host\":\"" + jesc(String(e.host)) + "\",\"cip\":\"" + IPAddress(e.cip).toString() + "\"" + ipClientExtra(e.cip) + ",\"gaf\":" + gafamOf(e.host) + "}";
+    j += "{\"seq\":" + String(e.seq) + ",\"n\":" + String(e.count) + ",\"host\":\"" + jesc(String(e.host)) + "\",\"cip\":\"" + IPAddress(e.cip).toString() + "\"" + ipClientExtra(e.cip) + ",\"gaf\":" + gafamOf(e.host) + "}";
+    last = s;
+    n++;
   }
-  j += "]}";
+  j += "],\"more\":";
+  j += (last < evSeq ? "true" : "false");
+  if (skipped) {
+    j += ",\"skipped\":";
+    j += String(skipped);
+  }
+  j += "}";
+  noteHeap(1);
   web.send(200, "application/json", j);
 }
 static const char* CSRF_HEADER = "X-Requested-With";
@@ -2241,8 +2198,11 @@ static void handlePac() {
   // "url <substr>" rules: the client's PAC sees the full URL (path included) and routes a
   // match to this device's black-hole port, which just drops it -> that resource fails to
   // load. This device never proxies real traffic; it only closes these connections.
-  for (int i = 0; i < numUrl; i++)
-    b += "if(url.indexOf('" + urlDom[i] + "')>=0)return 'PROXY " + bh + ";';";
+  // While blocking is paused (globally or for this client) emit no url rules, so a fresh
+  // PAC fetch stops routing matched URLs to the black hole.
+  if (blockingActiveFor((uint32_t)web.client().remoteIP()))
+    for (int i = 0; i < numUrl; i++)
+      b += "if(url.indexOf('" + urlDom[i] + "')>=0)return 'PROXY " + bh + ";';";
   b += "if(isPlainHostName(host)||shExpMatch(host,'*.local')||host=='localhost'||shExpMatch(host,'127.*')||shExpMatch(host,'192.168.*')||shExpMatch(host,'10.*'))return 'DIRECT';";
   b += proxyAddr.length() ? ("return 'PROXY " + proxyAddr + "; DIRECT';}") : "return 'DIRECT';}";
   web.send(200, "application/x-ns-proxy-autoconfig", b);
@@ -2288,7 +2248,7 @@ static int dohForward(int qlen) {
     int sz = u.parsePacket();
     if (sz <= 0) continue;
     if (sz > (int)sizeof(buf)) { // don't relay a truncated reply
-      u.flush();
+      udpDrop(u);
       continue;
     }
     n = u.read(buf, sizeof(buf));
@@ -2325,7 +2285,7 @@ static void handleDoh() {
       buf[0] = oid >> 8;
       buf[1] = oid & 0xFF; // DoH reply must echo the request txid
       char cn[256];
-      if (cnameBlocked(buf, rlen, qend, cn, sizeof(cn))) { // same defenses as the UDP path
+      if (blockingActiveFor(cip) && cnameBlocked(buf, rlen, qend, cn, sizeof(cn))) { // same defenses as the UDP path
         buf[2] = 0x81;
         buf[3] = 0x83;
         buf[6] = buf[7] = buf[8] = buf[9] = buf[10] = buf[11] = 0;
@@ -2344,6 +2304,7 @@ static void handleDoh() {
   String out; // String(const char*, len) isn't available on ESP8266; append bytes (keeps NULs)
   out.reserve(rlen);
   for (int i = 0; i < rlen; i++) out += (char)buf[i];
+  noteHeap(1); // DoH copies the reply into a String: another per-request heap peak
   web.send(200, "application/dns-message", out);
 }
 static void handleSetProxy() {
@@ -2381,24 +2342,8 @@ static void handleSetBlock() {
   if (web.hasArg("rb")) rebindGuard = (web.arg("rb") == "1");
   if (web.hasArg("ss")) safeSearchMask = (uint8_t)(web.arg("ss").toInt() & 0xF);
   if (web.hasArg("pl")) secLevel = (uint8_t)constrain(web.arg("pl").toInt(), 0, 3);
+  if (web.hasArg("ttl")) blockTtl = (uint32_t)constrain(web.arg("ttl").toInt(), 0, 86400);
   saveBlockCfg();
-  web.send(200, "text/plain", "ok");
-}
-static void handleSetSyslog() {
-  if (!requireAuth()) return;
-  if (web.hasArg("h")) {
-    syslogHost = web.arg("h");
-    syslogHost.trim();
-  }
-  if (web.hasArg("p")) {
-    syslogPort = web.arg("p").toInt();
-    if (!syslogPort) syslogPort = 514;
-  }
-  saveSyslogCfg();
-  if (syslogHost.length() && !syslogReady) {
-    syslogCli.begin(0);
-    syslogReady = true;
-  }
   web.send(200, "text/plain", "ok");
 }
 static void handleSetHost() {
@@ -2449,14 +2394,17 @@ static bool foreignHost(String& host) {
   return host.length() && !isDeviceName(host);
 }
 static void serveSinkhole(const String& host) {
-  if (isBlocked(host.c_str())) {
+  const bool active = blockingActiveFor((uint32_t)web.client().remoteIP());
+  if (active && isBlocked(host.c_str())) {
     handleBlockPage();
     return;
   }
   web.sendHeader("Cache-Control", "no-store");
   secHeaders(nullptr);
-  web.send(200, "text/html; charset=utf-8", "<!doctype html><meta charset=utf-8><body style='font:16px system-ui;text-align:center;margin-top:60px'>"
-                                            "Allowed. Reload in a few seconds (DNS cache).</body>");
+  web.send(200, "text/html; charset=utf-8", active ? "<!doctype html><meta charset=utf-8><body style='font:16px system-ui;text-align:center;margin-top:60px'>"
+                                                     "Allowed. Reload in a few seconds (DNS cache).</body>"
+                                                   : "<!doctype html><meta charset=utf-8><body style='font:16px system-ui;text-align:center;margin-top:60px'>"
+                                                     "Blocking is paused. Reload in a few seconds (DNS cache).</body>");
 }
 // Root: the dashboard for this device, the block page for a sinkholed host.
 // The dashboard requires Basic auth: navigation makes the browser prompt for WEB_PASS,
@@ -2607,10 +2555,37 @@ static void reopenBlocklist() {
   }
   buildFlashIndex();
 }
-static void beginBlocklistSwap() {
-  // Do NOT touch the live blocklist here: only clear the pending file. The live list keeps
-  // serving until commitNewBlocklist() successfully validates and swaps in the new one.
+// Free bytes on the blocklist filesystem (the cores expose this differently).
+static size_t fsFreeBytes() {
+#if defined(ESP8266)
+  FSInfo inf;
+  if (!LittleFS.info(inf) || inf.totalBytes < inf.usedBytes) return 0;
+  return inf.totalBytes - inf.usedBytes;
+#else
+  size_t total = LittleFS.totalBytes(), used = LittleFS.usedBytes();
+  return total > used ? total - used : 0;
+#endif
+}
+static void beginBlocklistSwap(size_t incoming) {
+  // Clear the pending file. When the filesystem can hold both blobs (ESP8266's 2 MB FS) the
+  // live list keeps serving until commitNewBlocklist() validates and swaps in the new one.
   LittleFS.remove("/blocklist.new");
+  File live = LittleFS.open(BLOCKLIST_PATH, "r");
+  size_t liveB = live ? live.size() : 0;
+  if (live) live.close();
+  size_t freeB = fsFreeBytes();
+  // The ESP32 layout has a 0.96 MB blocklist partition but a ~930 KB blob: a second copy
+  // never fits, so the safe swap would reject every upload. Free the live copy first (the
+  // upload then streams into /blocklist.new); on an aborted upload blocking fails open.
+  if (liveB && incoming && freeB < incoming + 512) {
+    if (blocklist) blocklist.close();
+    LittleFS.remove("/blocklist.old");
+    if (LittleFS.remove(BLOCKLIST_PATH)) {
+      Serial.printf("[ota] FS free %u B < upload %u B: live blocklist dropped for the swap\n",
+                    (unsigned)freeB, (unsigned)incoming);
+      reopenBlocklist(); // numHashes=0 while /blocklist.new is written
+    }
+  }
 }
 static bool commitNewBlocklist() { // /blocklist.new -> live (validated)
   File f = LittleFS.open("/blocklist.new", "r");
@@ -2662,7 +2637,7 @@ static void handleUpload() {
       break;
     }
     upOk = false;
-    beginBlocklistSwap();
+    beginBlocklistSwap((size_t)web.header("Content-Length").toInt()); // 0 if chunked
     upFile = LittleFS.open("/blocklist.new", "w");
     upWriteOk = (bool)upFile; // a full/failed FS must reject the blob, not silently truncate it
     Serial.printf("[ota] receiving %s\n", u.filename.c_str());
@@ -2679,7 +2654,7 @@ static void handleUpload() {
       if (blocklist) blocklist.close();
       reopenBlocklist();
     }
-    Serial.printf("[ota] %s -> %u domains\n", upOk ? "OK" : "REJECTED", numHashes);
+    Serial.printf("[ota] %s -> %u domains\n", upOk ? "OK" : "REJECTED", (unsigned)numHashes);
     break;
   case UPLOAD_FILE_ABORTED:
     if (!upAuthOk) break;
@@ -2706,6 +2681,19 @@ static void loadStats() {
   if (f.available()) secPages = (uint32_t)f.readStringUntil('\n').toInt();
   if (f.available()) pagesServed = (uint32_t)f.readStringUntil('\n').toInt();
   if (pagesServed < secPages) pagesServed = secPages; // migration/consistency: denom >= numer
+  // Destination map: sparse "CC count" lines, one per country that got traffic (old files: none).
+  while (f.available()) {
+    String ln = f.readStringUntil('\n');
+    if (ln.length() < 4 || ln[2] != ' ') continue;
+    for (uint16_t i = 0; i < GEO_NCODES; i++)
+      if (ln[0] == (char)pgm_read_byte(&GEO_CODES[i * 2]) &&
+          ln[1] == (char)pgm_read_byte(&GEO_CODES[i * 2 + 1])) {
+        uint32_t v = (uint32_t)ln.substring(3).toInt();
+        geoHits[i] += v;
+        geoMapped += v;
+        break;
+      }
+  }
   f.close();
   savedBlocked = totalBlocked;
   savedAllowed = totalAllowed;
@@ -2726,6 +2714,11 @@ static void saveStats() {
   f.println(dnssecSeen);
   f.println(secPages);    // pages that got the privacy (header) rewrite
   f.println(pagesServed); // all pages served (so the % survives reboots)
+  // Destination map: only the countries that were hit (245 slots, ~40 lines typical).
+  for (uint16_t i = 0; i < GEO_NCODES; i++)
+    if (geoHits[i])
+      f.printf("%c%c %u\n", (char)pgm_read_byte(&GEO_CODES[i * 2]),
+               (char)pgm_read_byte(&GEO_CODES[i * 2 + 1]), (unsigned)geoHits[i]);
   f.close();
   savedBlocked = totalBlocked;
   savedAllowed = totalAllowed;
@@ -2750,9 +2743,8 @@ static void resetStats() {
   dnssecOk = dnssecSeen = 0;
   secPages = 0;
   pagesServed = 0;
-  evSeq = 0;         // clear the recent-blocked ring too
-  lastSyslogSeq = 0; // and reset the syslog cursor (else it underflows after evSeq=0)
-  saveStats();
+  evSeq = 0;           // clear the recent-blocked ring too
+  statsSaveReq.mark(); // flush from the loop, not inside the HTTP handler
 }
 // ---------- firmware OTA (browser upload of firmware.bin -> reboot) ----------
 static bool fwAuthOk = false;
@@ -2764,6 +2756,7 @@ static void handleFwUpdateDone() {
   bool ok = !Update.hasError();
   web.send(ok ? 200 : 500, "text/plain", ok ? "ok, rebooting" : "firmware update failed");
   if (ok) {
+    bootDbgMarkRestart(BOOT_INTENT_OTA); // tell the next boot this reset was ours, not a crash
     delay(300);
     ESP.restart();
   }
@@ -3382,13 +3375,12 @@ void setup() {
   if (!LittleFS.begin(true)) Serial.println("LittleFS FAILED");
 #endif
   reopenBlocklist();
-  Serial.printf("blocklist: %u domains\n", numHashes);
+  Serial.printf("blocklist: %u domains\n", (unsigned)numHashes);
   loadRules();
   loadHosts();
   loadNames();
   loadBlockCfg();
   loadProxyCfg();
-  loadSyslogCfg();
   loadStats();
   loadDnsCfg();
   {
@@ -3397,7 +3389,7 @@ void setup() {
       bootId = f.readStringUntil('\n').toInt();
       f.close();
     }
-    bootId++;
+    bootId = bootDbgInit(bootId + 1); // no-op unless BOOT_DEBUG; may adopt a recorded id
     f = LittleFS.open("/boot.cnt", "w");
     if (f) {
       f.println(bootId);
@@ -3441,6 +3433,7 @@ void setup() {
       }
       if (!connectWiFi()) {
         Serial.println("[provision] still not connected; rebooting in 10s");
+        bootDbgMarkRestart(BOOT_INTENT_PROVISION);
         delay(10000);
         ESP.restart();
       }
@@ -3448,6 +3441,7 @@ void setup() {
     } else {
       // Creds exist but the link is down (router off?): reboot and retry.
       Serial.println("[setup] saved WiFi didn't connect; rebooting in 30s");
+      bootDbgMarkRestart(BOOT_INTENT_PROVISION);
       delay(30000);
       ESP.restart();
     }
@@ -3467,6 +3461,7 @@ void setup() {
   probeCli.begin(0);
   tcpDns.begin();
   tcpDns.setNoDelay(true); // TCP :53 fallback for truncated UDP replies
+  tcpRelay.begin(tcpDns, upstreamIP, DNS_PORT, tcpBuf, sizeof(tcpBuf), tcpResolve, tcpReplied, nullptr);
   blackhole.begin();       // drop PAC-routed URL matches (see /proxy.pac)
 #if defined(ESP8266)
   web.collectHeaders(CSRF_HEADER); // ESP8266 variadic overload; a char*[] picks the wrong template
@@ -3497,7 +3492,6 @@ void setup() {
     dnsProbeNext = 0; // probe the new list right away
     web.send(200, "text/plain", "ok");
   });
-  web.on("/setsyslog", handleSetSyslog);     // remote syslog host/port
   web.on("/proxy.pac", HTTP_GET, handlePac); // auto-proxy config (no auth: OS/browser fetch)
   web.on("/wpad.dat", HTTP_GET, handlePac);  // WPAD alias (DNS answers "wpad" -> this device)
   web.on("/dns-query", HTTP_GET, handleDoh); // DoH (RFC 8484) over plain HTTP; no TLS
@@ -3515,7 +3509,8 @@ void setup() {
   web.on("/rules", HTTP_POST, []() {
     if (!requireAuth()) return;
     String body = web.arg("plain");
-    int cb = 0, ca = 0, ck = 0, cw = 0; // count per kind before writing
+    noteHeap(1); // a pasted rules file doubles in RAM (arg + copy): the one user-driven OOM path
+    int cb = 0, ca = 0, ck = 0, cw = 0, cu = 0; // count per kind before writing
     for (int start = 0; start <= (int)body.length();) {
       int nl = body.indexOf('\n', start);
       if (nl < 0) nl = body.length();
@@ -3542,9 +3537,10 @@ void setup() {
       } else if (verb == "allow" || verb == "a") ca++;
       else if (verb == "keyword" || verb == "k") ck++;
       else if (verb == "wildcard" || verb == "w") cw++;
+      else if (verb == "url" || verb == "u") cu++;
     }
-    if (cb > MAX_CUSTOM || ca > MAX_ALLOW || ck > MAX_KW || cw > MAX_WILD) {
-      web.send(400, "text/plain", String("too many rules (max block=") + MAX_CUSTOM + " allow=" + MAX_ALLOW + " keyword=" + MAX_KW + " wildcard=" + MAX_WILD + "); not saved");
+    if (cb > MAX_CUSTOM || ca > MAX_ALLOW || ck > MAX_KW || cw > MAX_WILD || cu > MAX_URL) {
+      web.send(400, "text/plain", String("too many rules (max block=") + MAX_CUSTOM + " allow=" + MAX_ALLOW + " keyword=" + MAX_KW + " wildcard=" + MAX_WILD + " url=" + MAX_URL + "); not saved");
       return;
     }
     File f = LittleFS.open("/rules.cfg", "w");
@@ -3616,9 +3612,13 @@ void loop() {
   uint32_t _dd = micros() - _d0;
   if (_dd > stMaxDns) stMaxDns = _dd;
   pollUpstream();                                      // relay any upstream replies for in-flight queries
+  noteHeap(2);                                         // low-water mark attributed to the DNS path
   probeDnsTick();                                      // non-blocking latency sweep (own UDP socket)
   applyDnsSwitch();                                    // only when nothing is in flight
-  handleTcpDns();                                      // TCP :53 fallback (rare; blocking, see note)
+  uint32_t _t0 = micros();
+  tcpRelay.poll(); // TCP :53 fallback (one incremental step; the connect is the only bounded stall)
+  uint32_t _td = micros() - _t0;
+  if (_td > stMaxTcp) stMaxTcp = _td;
   handleBlackhole();                                   // drop PAC-routed URL matches
   if (!busy || (uint32_t)(millis() - lastWeb) > 100) { // web only when idle (anti-starvation cap)
     lastWeb = millis();
@@ -3626,6 +3626,7 @@ void loop() {
     web.handleClient();
     uint32_t _ww = micros() - _w0;
     if (_ww > stMaxWeb) stMaxWeb = _ww;
+    noteHeap(1); // low-water mark attributed to a web request (bursts of these are the OOM risk)
   }
 #if defined(ESP8266)
   MDNS.update();
@@ -3634,16 +3635,32 @@ void loop() {
     blockingOn = true;
     resumeAt = 0;
   }
-  flushSyslogLazy(!busy);            // lazy: only when idle and nothing in flight (no DNS latency impact)
+  bootDbgTick(WiFi.status() == WL_CONNECTED); // no-op unless BOOT_DEBUG (SNTP + /boot.cfg)
   cpu_gov::checkIdle();              // CPU governor: ondemand (self-throttled)
-  static uint32_t lastStatsSave = 0; // persist counters every ~5 min (only if changed)
+  // Deferred flash write: never from a handler, never with a query/TCP job in flight (a
+  // write disables the flash cache and would land inside the DNS path). The 30 s fallback
+  // keeps a permanently busy resolver from deferring the counters forever.
+  static uint32_t statsPendingAt = 0;
+  static bool statsPending = false;
+  if (statsSaveReq.pending() && !statsPending) {
+    statsPending = true;
+    statsPendingAt = millis();
+  }
+  bool flashIdle = !busy && !tcpRelay.active() && dnsIdle();
+  bool flashStale = statsPending && (uint32_t)(millis() - statsPendingAt) >= 30000UL;
+  if (statsPending && (flashIdle || flashStale)) {
+    statsSaveReq.take();
+    statsPending = false;
+    saveStats();
+  }
+  static uint32_t lastStatsSave = 0; // mark for persistence every ~5 min (only if changed)
   if ((uint32_t)(millis() - lastStatsSave) >= 300000UL) {
     lastStatsSave = millis();
     uint32_t gsum = gafamCnt[0] + gafamCnt[1] + gafamCnt[2] + gafamCnt[3] + gafamCnt[4] + gafamCnt[5];
     if (totalBlocked != savedBlocked || totalAllowed != savedAllowed || totalCached != savedCached ||
         gsum != savedGafam || dnssecSeen != savedDnssec || secPages != savedSecPages ||
         pagesServed != savedPagesServed)
-      saveStats();
+      statsSaveReq.mark();
   }
   if (ledUntil && (int32_t)(millis() - ledUntil) >= 0) {
     digitalWrite(LED_PIN, LED_OFF);

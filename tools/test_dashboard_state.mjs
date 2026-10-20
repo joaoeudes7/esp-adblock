@@ -33,13 +33,20 @@ const STATS = {
     { ip: '10.0.0.3', mac: 'aa:aa', name: 'TV', blocked: 5, allowed: 50, ps: 0 },
     { ip: '10.0.0.2', mac: 'bb:bb', name: '', blocked: 9, allowed: 1, ps: 120 },
   ],
-  ev: [
-    { seq: 1, host: 'track.example', cip: '10.0.0.3' },
-    { seq: 2, host: 'ads.example', cip: '10.0.0.2' },
-  ],
+  evSeq: 2,
   custom: ['a.example'],
   wild: [],
   hosts: [],
+}
+
+// /stats.json no longer carries the ring: the dashboard fetches it by cursor from /events.
+const EVENTS = {
+  last: 2,
+  ev: [
+    { seq: 1, host: 'track.example', cip: '10.0.0.3' },
+    { seq: 2, host: 'ads.example', cip: '10.0.0.2' },
+  ], // ascending, like the firmware's cursor page; the UI unshifts to newest-first
+  more: false,
 }
 
 const el = () => ({
@@ -59,10 +66,11 @@ const document = {
   body: { appendChild() {} },
 }
 const storage = () => ({ getItem: () => null, setItem() {}, removeItem() {} })
-const fetchStub = async (url) =>
-  url === '/stats.json'
-    ? { status: 200, ok: true, json: async () => STATS }
-    : { status: 200, ok: true, text: async () => '' }
+const fetchStub = async (url) => {
+  if (url === '/stats.json') return { status: 200, ok: true, json: async () => STATS }
+  if (url.startsWith('/events?')) return { status: 200, ok: true, json: async () => EVENTS }
+  return { status: 200, ok: true, text: async () => '' }
+}
 
 const factory = new Function(
   'window',

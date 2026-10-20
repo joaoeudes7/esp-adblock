@@ -46,12 +46,13 @@ A hardened **Pi-hole-style DNS ad-blocker** for **ESP8266** and **ESP32 / C3 / S
 
 **Dashboard** — `http://esp-adblock.local/`
 - Live stats: blocked / allowed / cached, list size, **per-client** block+allow, **recently-blocked** ring, devices table (friendly names + **per-client pause**), DNS RTT (split into **forward** vs **device** ms), VCC, firmware **version**.
-- **Where traffic goes** — an estimated destination map + top countries for the IPs this device resolved (one flash lookup per `/14` from `geo_table.h`, no RAM index; built from DB-IP Lite, CC BY 4.0). RAM-only, so it reads "since reboot".
+- **Where traffic goes** — an estimated destination map + top countries for the IPs this device resolved (one flash lookup per `/14` from `geo_table.h`, no RAM index; built from DB-IP Lite, CC BY 4.0). Counters persist in `/stats.cfg`.
 - **Provider share + DNSSEC telemetry** — GAFM (Google/Apple/Meta/Amazon/Microsoft) share of allowed lookups, and the percentage of forwarded answers with the DNSSEC `AD` bit set. Read-only counters, no extra lookups.
 - **Counters survive reboots** (`/stats.cfg`): blocked/allowed/cached, provider share, DNSSEC and header-rewriter percentages are flushed to LittleFS, so the dashboard totals don't reset on every OTA/reboot (the **Reset** button still zeroes everything).
 - **Blocklist freshness nudge** — `/stats.json` carries `upat` (seconds since the last successful upload); the dashboard warns when the list has not been updated since boot.
-- Controls: pause/resume, block mode, IPv4-only, keyword, **SafeSearch**, rebind guard, block + **wildcard** rules, local names, **privacy header level**, **proxy (PAC)**, **blocklist upload** (the **browser** fetches the URL over HTTPS and POSTs it — the device never does TLS), **firmware OTA**, **Change Wi-Fi** (scan → pick → password, tested before saving).
+- Controls: pause/resume, block mode, **blocked-answer cache TTL**, IPv4-only, keyword, **SafeSearch**, rebind guard, block + **wildcard** rules, local names, **privacy header level**, **proxy (PAC)**, **blocklist upload** (the **browser** fetches the URL over HTTPS and POSTs it — the device never does TLS), **firmware OTA**, **Change Wi-Fi** (scan → pick → password, tested before saving).
 - **Auto-refresh by default** — the page polls every ~5s (no toggle); backs off to 30s when the device is offline or the tab is hidden, and the header **Refresh** button forces one now. A **boot id** reloads open pages after a device reboot.
+- **Boot/crash forensics** (`/boot.cfg`, **debug builds only**) — build with `PLATFORMIO_BUILD_FLAGS="-D BOOT_DEBUG=1" pio run -e esp8266`. Then every boot records a wall-clock timestamp (SNTP; 0 when offline), the reset cause, and the *previous* boot's last uptime + lowest heap: `/stats.json` gains `bt`, `nt`, `rst` and `prev.{id,bt,up,hmin,hup,hctx,end,sus}` (a low heap that ended in panic/watchdog sets `prev.sus: "oom"`). Refreshed every 5 min and on every ~1 KB heap drop so an OOM leaves evidence. Normal builds compile the module out entirely (no SNTP, no extra flash writes, no extra keys).
 - **Rules editor**: block/wildcard lists plus the **raw `/rules.cfg`** (pre-loaded, editable, replaces the file).
 - UI: **Alpine.js** (declarative state, CSP build from unpkg) with the **Lucide** icon subset **inlined** (no icon CDN), loading overlay, responsive dark theme, keyboard-sortable tables and a11y.
 
@@ -66,7 +67,6 @@ A hardened **Pi-hole-style DNS ad-blocker** for **ESP8266** and **ESP32 / C3 / S
 
 **Ops & security**
 - HTTP **Basic auth** on every state-changing endpoint + a **CSRF header** (`X-Requested-With`).
-- **Remote syslog**, sent lazily off-idle (never competes with DNS latency).
 - **Status LED blink** on each blocked lookup (built-in LED by default).
 - WiFi watchdog, DNS-first loop, safe reboot paths.
 
@@ -196,8 +196,9 @@ python3 tools/build_world_svg.py ne_110m_admin_0_countries.geojson  # -> web/wor
 `src/geo_table.h` is 16 KB: one byte per `/14` IPv4 block, looked up with `ip >> 18` (one flash
 read, no search, no RAM index). A block keeps its majority country only when that country holds
 at least 60% of the block (`--min-share`); below that it is `255` and the map leaves it grey
-instead of painting a wrong country. The counters are RAM-only, so the card reads "since
-reboot". Data: [DB-IP](https://db-ip.com) Lite (**CC BY 4.0** — attribution is required);
+instead of painting a wrong country. The counters persist with the other totals in
+`/stats.cfg` (sparse `CC count` lines, only the countries that were hit), so the card reads "since
+the last reset" rather than "since reboot". Data: [DB-IP](https://db-ip.com) Lite (**CC BY 4.0** — attribution is required);
 regenerate monthly, a stale table paints stale countries. The SVG is Natural Earth 110m
 (public domain), projected and simplified by the tool.
 
@@ -244,7 +245,7 @@ CSRF header:
 
 - `/addblock`, `/unblock`, `/addkeyword`, `/delkeyword`, `/delallow`, `/setname`, `/pauseclient`
 - `/pause`, `/resume`, `/resetstats`, `/setblock`, `/setdns`
-- `/sethost`, `/delhost`, `/setsyslog`, `/setproxy`
+- `/sethost`, `/delhost`, `/setproxy`
 - `/setwifi`, `/scan`
 - `/upload`, `/update` (blocklist and firmware OTA), `/rules` (POST)
 
@@ -400,4 +401,4 @@ cert error (standard sinkhole limit). Finding the device's IP: serial `WiFi up: 
 - Bloom false positives (~0.8%) can block a rare legitimate domain; subdomains are covered
   by the query-time suffix matching.
 - Statistics: `domains` = real count from the header; `cached` = served from the response cache;
-  totals persist in `/stats.cfg`. The destination map is RAM-only ("since reboot").
+  totals persist in `/stats.cfg`, including the destination map (sparse per-country lines).

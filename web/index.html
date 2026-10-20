@@ -83,6 +83,15 @@
       .spacer {
         flex: 1;
       }
+      .host .cnt {
+        font-size: 11px;
+        color: var(--muted);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 0 5px;
+        margin-left: 5px;
+        white-space: nowrap;
+      }
       .badge {
         font-size: 12px;
         color: var(--muted);
@@ -1025,15 +1034,20 @@
         <div class="devline note" id="dev" :class="health.cls" x-text="netLine"></div>
         <details class="devline" id="devraw">
           <summary class="note">Network details</summary>
-          <div id="devnums" class="note" x-text="netNums"></div>
+          <div
+            id="devnums"
+            class="note"
+            title="probe = one minimal query the device sends itself (best case, usually a cache hit). avg = mean of the last real client lookups, split into resolver wait + ESP-side time."
+            x-text="netNums"
+          ></div>
         </details>
       </section>
 
       <section class="card" id="geocard">
         <h2><i data-lucide="globe" aria-hidden="true"></i> Where traffic goes</h2>
         <div class="note" style="margin-bottom: 10px">
-          Estimated destination from the IPs this device resolved, since the last reboot. Grey means unknown or too
-          mixed to call.
+          Estimated destination from the IPs this device resolved, since the last reset (survives reboots). Grey means
+          unknown or too mixed to call.
         </div>
         <div class="geo">
           <div class="geomap" id="geomap" aria-hidden="true"></div>
@@ -1082,7 +1096,13 @@
                   <td>
                     <div class="host">
                       <span class="av" :class="avCls(e.gaf)" x-text="avatarLetter(e.host)"></span
-                      ><span x-text="e.host"></span>
+                      ><span x-text="e.host"></span
+                      ><span
+                        class="cnt"
+                        x-show="e.n > 1"
+                        :title="e.n + ' blocked lookups folded into this entry'"
+                        x-text="'×' + e.n"
+                      ></span>
                     </div>
                   </td>
                   <td
@@ -1353,6 +1373,22 @@
 
             <details class="sec">
               <summary>Privacy &amp; network</summary>
+              <h3>Blocked answer cache (DNS TTL)</h3>
+              <label class="field" style="margin-bottom: 8px"
+                >Cache each blocked host for
+                <input
+                  id="bttl"
+                  type="number"
+                  min="0"
+                  max="86400"
+                  step="1"
+                  style="width: 90px"
+                  aria-label="Seconds clients cache a blocked answer"
+                  x-model.number="cfg.bttl"
+                  @change="saveBlock('ttl', cfg.bttl)"
+                />
+                seconds <span class="note">(0 = don't cache; lower = pause/resume applies sooner)</span></label
+              >
               <h3>Page security headers</h3>
               <div class="row tight" style="margin-bottom: 8px">
                 <select
@@ -1388,25 +1424,6 @@
                 <code>/wpad.dat</code>). <code>url</code> rules (above) then route matching URLs here to be dropped — no
                 proxy/cert needed. The <b>Proxy address</b> below is a separate, real proxy for everything else; leave
                 empty for direct.
-              </div>
-
-              <h3>Send logs to another machine (optional)</h3>
-              <div class="row tight">
-                <input
-                  id="shost"
-                  placeholder="host (empty = off)"
-                  size="18"
-                  aria-label="Syslog host"
-                  x-model="cfg.shost"
-                /><input
-                  id="sport"
-                  size="4"
-                  style="width: 64px"
-                  aria-label="Syslog port"
-                  x-model.number="cfg.sport"
-                /><button class="btnico" @click="saveSyslog()">
-                  <i data-lucide="check" aria-hidden="true"></i>Save
-                </button>
               </div>
             </details>
 
@@ -1626,6 +1643,7 @@
 
       const EMPTY_CFG = {
         bmode: 'ip',
+        bttl: 30,
         v4only: false,
         kw: false,
         rb: false,
@@ -1753,9 +1771,22 @@
         },
         get health() {
           const s = this.s || {},
-            rssi = s.rssi || 0
-          if (s.dnsTo > 2) return { msg: 'DNS timeouts, check your upstream resolver', cls: 'bad' }
-          if (s.dns > 350) return { msg: 'DNS is slow (' + s.dns + ' ms)', cls: 'bad' }
+            rssi = s.rssi || 0,
+            up = s.dnsf || 0,
+            esp = s.dnsl || 0,
+            who = s.upstream ? 'resolver ' + s.upstream : 'the resolver'
+          // Which side failed: dnsTo/pf are upstream-only counters; dnsl is our own cost.
+          if (s.dnsTo > 2) return { msg: 'Upstream DNS — ' + who + ' missed ' + s.dnsTo + ' lookups', cls: 'bad' }
+          if (s.pf > 2) return { msg: 'Upstream DNS — ' + who + ' missed ' + s.pf + ' probes', cls: 'bad' }
+          if (s.dns > 350)
+            return {
+              msg:
+                'DNS slow — ' +
+                (esp > up
+                  ? 'this device ' + esp + ' ms (resolver ' + up + ' ms)'
+                  : 'resolver ' + up + ' ms (this device ' + esp + ' ms)'),
+              cls: 'bad',
+            }
           if (rssi < -75) return { msg: 'Weak Wi-Fi signal', cls: 'bad' }
           if (rssi < -67) return { msg: 'Wi-Fi is a bit weak', cls: '' }
           return { msg: 'Healthy', cls: 'ok' }
@@ -1765,9 +1796,9 @@
           if (!s || !s.upstream) return ''
           const cur = (s.dnslist || []).find((d) => d.cur)
           return (
-            ' · upstream ' +
+            ' · resolver ' +
             s.upstream +
-            (cur ? (cur.ms < 0 ? ' (timeout)' : cur.ms ? ' (' + cur.ms + ' ms)' : ' (probing…)') : '')
+            (cur ? (cur.ms < 0 ? ' · probe timeout' : cur.ms ? ' · probe ' + cur.ms + ' ms' : ' · probing…') : '')
           )
         },
         get netLine() {
@@ -1781,11 +1812,20 @@
             (s.rssi || 0) +
             ' dBm' +
             (s.vcc ? ' · ' + (s.vcc / 1000).toFixed(2) + ' V' : '') +
-            (s.dns ? ' · DNS ' + s.dns + ' ms (forward ' + (s.dnsf || 0) + ', device ' + (s.dnsl || 0) + ')' : '') +
-            (s.dnsTo ? ' · ' + s.dnsTo + ' timeout' + (s.dnsTo > 1 ? 's' : '') : '') +
+            (s.dns ? ' · DNS ' + s.dns + ' ms avg (resolver ' + (s.dnsf || 0) + ' + ESP ' + (s.dnsl || 0) + ')' : '') +
+            (s.dnsTo ? ' · ' + s.dnsTo + ' lookup' + (s.dnsTo > 1 ? 's' : '') + ' timed out' : '') +
             (s.doh ? ' · ' + s.doh + ' encrypted-DNS attempts' : '') +
             (s.pac ? ' · PAC ' + s.pac + ' request' + (s.pac > 1 ? 's' : '') : '') +
-            (s.pf ? ' · ' + s.pf + ' probe timeout' + (s.pf > 1 ? 's' : '') : '')
+            (s.pf ? ' · ' + s.pf + ' probe timeout' + (s.pf > 1 ? 's' : '') : '') +
+            (s.hmin
+              ? ' · min heap ' +
+                (s.hmin / 1024).toFixed(1) +
+                ' KB @' +
+                Math.round((s.hup || 0) / 60) +
+                'm (' +
+                (s.hctx === 1 ? 'web' : 'dns') +
+                ')'
+              : '')
           )
         },
         get ustat() {
@@ -2008,13 +2048,6 @@
         saveProxy() {
           this.act(null, '/setproxy?p=' + enc(this.cfg.pxy.trim()), 'Proxy saved')
         },
-        saveSyslog() {
-          this.act(
-            null,
-            '/setsyslog?h=' + enc(this.cfg.shost.trim()) + '&p=' + (parseInt(this.cfg.sport) || 514),
-            'Syslog saved',
-          )
-        },
         saveDns() {
           const v = this.cfg.dnsservers
             .split(/[\s,;]+/)
@@ -2105,13 +2138,12 @@
           if (!s) return
           this.cfg = {
             bmode: s.bmode === 2 ? 'nxdomain' : s.bmode === 1 ? 'zero' : 'ip',
+            bttl: s.bttl ?? 30,
             v4only: !!s.v4only,
             kw: !!s.kw,
             rb: !!s.rb,
             ss: !!s.ss,
             pl: s.pl || 0,
-            shost: s.syslog || '',
-            sport: s.sysport || 514,
             pxy: s.proxy || '',
             dnsservers: (s.dnslist || []).map((d) => d.ip).join('\n'),
           }
@@ -2336,17 +2368,7 @@
           location.reload()
           return
         } // device rebooted -> refresh this open page
-        if (s.ev && s.ev.length) {
-          let a = state.ev.slice()
-          for (const e of s.ev) {
-            if (e.seq > evLast) {
-              evLast = e.seq
-              a.unshift({ seq: e.seq, host: e.host, gaf: e.gaf, cip: e.cip, mac: e.mac, name: e.name, at: Date.now() })
-            }
-          }
-          if (a.length > 200) a.length = 200
-          state.ev = a
-        }
+        if (s.evSeq > evLast) loadEvents() // on demand: only when the ring moved
         state.s = s
         state.renderGeo()
         state.pauseIn = !s.blocking && s.resumeIn > 0 ? s.resumeIn : 0
@@ -2357,6 +2379,41 @@
         if (boot) boot.classList.add('off')
         if (loadbar) loadbar.classList.remove('on')
         LU()
+      }
+      // Events on demand: the device keeps a 16-slot ring and the client asks by cursor only
+      // when evSeq moved. Max 3 pages (16 events each) per tick, so a flood of blocks costs at
+      // most 3 small requests instead of inflating every /stats.json.
+      async function loadEvents() {
+        for (let page = 0; page < 3; page++) {
+          let d
+          try {
+            const r = await fetch('/events?since=' + evLast)
+            if (!r.ok) return
+            d = await r.json()
+          } catch (_) {
+            return
+          }
+          if (d.ev && d.ev.length) {
+            const a = state.ev.slice()
+            for (const e of d.ev) {
+              if (e.seq <= evLast) continue
+              a.unshift({
+                seq: e.seq,
+                host: e.host,
+                gaf: e.gaf,
+                cip: e.cip,
+                mac: e.mac,
+                name: e.name,
+                at: Date.now(),
+                n: e.n || 1,
+              })
+            }
+            if (a.length > 200) a.length = 200
+            state.ev = a
+          }
+          if (typeof d.last === 'number' && d.last > evLast) evLast = d.last
+          if (!d.more) break
+        }
       }
       async function loadRulesFile() {
         state.rulesMsg = '…'

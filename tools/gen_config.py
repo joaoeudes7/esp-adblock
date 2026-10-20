@@ -25,7 +25,6 @@ CFG = os.path.join(ROOT, "config.env")
 SECRETS = os.path.join(ROOT, "src", "secrets.h")
 WIFICFG = os.path.join(ROOT, "data", "wifi.cfg")
 BLOCKCFG = os.path.join(ROOT, "data", "block.cfg")
-SYSLOGCFG = os.path.join(ROOT, "data", "syslog.cfg")
 DNSCFG = os.path.join(ROOT, "data", "dns.cfg")
 
 def parse(path):
@@ -106,9 +105,6 @@ def main():
         except ValueError:
             ss = 0
         f.write("%d\n" % ss)
-    with open(SYSLOGCFG, "w", encoding="utf-8") as f:
-        f.write(c.get("SYSLOG_HOST", "").strip() + "\n")
-        f.write(c.get("SYSLOG_PORT", "514").strip() + "\n")
 
     os.makedirs(os.path.dirname(DNSCFG), exist_ok=True)
     with open(DNSCFG, "w", encoding="utf-8") as f:

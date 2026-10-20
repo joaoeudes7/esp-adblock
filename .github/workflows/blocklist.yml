@@ -38,9 +38,9 @@ jobs:
           echo "size=$size magic=$magic domains=$n"
           case "$magic" in BLM1|BLM2) ;; *) echo "not a BLM1/BLM2 blob"; exit 1;; esac
           test "$n" -gt 40000                 # catches a silently shrunk list
-          # Cap at the SMALLEST target: the ESP32 spiffs partition is 0x150000 = 1,376,256 B
+          # Cap at the SMALLEST target: the ESP32 spiffs partition is 0xf0000 = 983,040 B
           # (minus LittleFS overhead), so a bigger blob would publish but never flash.
-          test "$size" -lt 1300000
+          test "$size" -lt 950000
       - name: Publish to the 'blocklist' release
         env:
           GH_TOKEN: ${{ github.token }}

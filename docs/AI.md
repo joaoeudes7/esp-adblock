@@ -31,7 +31,7 @@ desktop, HTTPS or `localhost`): flash + SHA-256/MD5 verification, then Wi-Fi pro
 **Improv Wi-Fi Serial** (or the text `CFG ssid|host|ip|gw|dns …` / `CFG commit` fallback for a
 static IP). Build it with `python3 tools/build_installer.py` — see `installer/README.md`.
 Build hooks (`extra_scripts`) run automatically: `tools/gen_config.py` (`config.env` →
-`src/secrets.h` + `data/wifi.cfg`/`block.cfg`/`syslog.cfg`) and `tools/build_web.py`
+`src/secrets.h` + `data/wifi.cfg`/`block.cfg`) and `tools/build_web.py`
 (`web/*.html` + `web/world.svg` → `src/page.h`). With no `config.env`, `gen_config` seeds from `config.env.example`.
 
 ## Run (verify)
@@ -78,7 +78,7 @@ curl -s -u "$U:$P" http://$IP/stats.json \
 
 The dashboard does the same from *Advanced → Maintenance* (blocklist) and *Advanced → Danger zone*
 (firmware). What `gen_config` bakes into `secrets.h` is **not** part of a firmware OTA: change it with
-the runtime endpoints (`/setblock`, `/setdns`, `/setwifi`, `/setsyslog`, `/setproxy`) or rebuild
+the runtime endpoints (`/setblock`, `/setdns`, `/setwifi`, `/setproxy`) or rebuild
 **and re-flash the filesystem**.
 
 ### Not installed, bricked, or no network — USB
@@ -102,6 +102,21 @@ pio run -e esp8266 -t uploadfs --upload-port <PORT>   # filesystem: data/*.cfg +
 kept across a firmware OTA; `/resetstats` zeroes it. The destination map is RAM-only and always
 restarts empty on boot.
 
+`/boot.cfg` holds the optional boot/crash record (`src/boot_debug.h`), **compiled only with
+`-D BOOT_DEBUG=1`** — normal builds omit it entirely (no SNTP client, no extra flash writes and
+no extra `/stats.json` keys). `src/boot_debug.h` stores: boot epoch (SNTP; 0 until/if it
+answers), reset class, and the previous boot's last snapshot (uptime, lowest free heap + when +
+context, and why it ended). It is rewritten at boot, every 5 min and whenever the heap low-water
+drops ~1 KB, so a crash cannot erase the evidence; the always-on counter stays in `/boot.cnt`.
+Exposed in `/stats.json` as `bt` (boot epoch), `nt` (now), `rst` (why this boot started) and
+`prev.{id,bt,up,hmin,hup,hctx,end,sus}`: `prev.end` is `ota`/`provision` for restarts the
+firmware initiated, and `prev.sus == "oom"` flags a low-heap panic/watchdog. Reboot detection
+is simply `boot`/`prev.id` changing; `prev.up` vs `prev.hmin` shows whether it died early.
+
+```sh
+PLATFORMIO_BUILD_FLAGS="-D BOOT_DEBUG=1" pio run -e esp8266   # then upload via POST /update
+```
+
 An interrupted OTA leaves the running firmware in place: the image goes to the spare app region and
 the bootloader switches only after a complete, valid write. On ESP32 the new image is confirmed only
 after 60 s of uptime, so a crash/boot loop before that rolls back to the previous slot on reset
@@ -111,7 +126,7 @@ after 60 s of uptime, so a crash/boot loop before that rolls back to the previou
 ### Storage map
 | area | contents |
 |---|---|
-| LittleFS | `/blocklist.bin`, `/rules.cfg`, `/hosts.cfg`, `/names.cfg`, `/dns.cfg`, `/block.cfg`, `/syslog.cfg`, `/proxy.cfg`, `/stats.cfg` (persisted counters + GAFM/DNSSEC/header %), `/wifi.cfg` (legacy `/custom.txt`, `/allow.txt` still read) |
+| LittleFS | `/blocklist.bin`, `/rules.cfg`, `/hosts.cfg`, `/names.cfg`, `/dns.cfg`, `/block.cfg`, ``/proxy.cfg`, `/stats.cfg` (persisted counters + GAFM/DNSSEC/header %), `/boot.cnt` (boot counter), `/boot.cfg` (boot/crash record, `BOOT_DEBUG` builds only), `/wifi.cfg` (legacy `/custom.txt`, `/allow.txt` still read) |
 | built in | `secrets.h` (WiFi + `WEB_USER`/`WEB_PASS` + `UPSTREAM_DNS` seed), `page.h` (`web/*.html` + `world.svg`), `geo_table.h` (`/14` → country, DB-IP CC BY 4.0), block page template |
 | EEPROM/NVS | WiFi `ssid`/`pass` (SmartConfig, `/setwifi`) |
 
@@ -124,14 +139,13 @@ device installed with `uploadfs`, holding BOOT clears NVS but the baked `/wifi.c
 ### `config.env` (pre-flash; baked at compile — a few keys also have runtime endpoints)
 Keys: `WIFI_SSID`, `WIFI_PASS`, `WIFI_IP`, `WIFI_GW`, `WIFI_DNS`, `WIFI_HOST`, `UPSTREAM_DNS`,
 `WEB_USER`, `WEB_PASS`, `BLOCK_MODE` (`ip|zero|nxdomain`), `IPV4_ONLY` (`0|1`), `KEYWORD_BLOCK` (`0|1`),
-`REBIND_GUARD` (`0|1`), `SAFESEARCH` (`0|1`), `PRIVACY_LEVEL` (`0..3`, response-header level; runtime-editable),
-`SYSLOG_HOST`, `SYSLOG_PORT`.
+`REBIND_GUARD` (`0|1`), `SAFESEARCH` (`0|1`), `PRIVACY_LEVEL` (`0..3`, response-header level; runtime-editable).
 `WIFI_DNS` = the resolver the **ESP itself** uses; **`UPSTREAM_DNS`** = the resolver(s) the device
 **forwards client queries to** (comma-separated, up to 4; default `1.1.1.1` Cloudflare; Quad9 `9.9.9.9`,
 Google `8.8.8.8`). Baked as `#define UPSTREAM_DNS_LIST` and seeded into `data/dns.cfg`; runtime-editable
 at **`/setdns`** (persisted in `/dns.cfg`, one IPv4 per line). The active resolver is `upstream` in
 `/stats.json`; every server is probed once a minute and the lowest-latency one wins.
-Generates `src/secrets.h` + `data/wifi.cfg`, `data/block.cfg`, `data/syslog.cfg`.
+Generates `src/secrets.h` + `data/wifi.cfg`, `data/block.cfg`.
 
 ### HTTP API
 Mutating endpoints require **Basic auth** (`WEB_USER:WEB_PASS`) + header
@@ -142,11 +156,11 @@ Mutating endpoints require **Basic auth** (`WEB_USER:WEB_PASS`) + header
 |---|---|---|---|
 | GET | `/` | — | Dashboard (**Basic auth**); with a blocked host `Host` → block page |
 | GET | `/world.svg` | — | Simplified world map SVG for the destination card (**Basic auth**, same as `/`); inlined in PROGMEM |
-| GET | `/stats.json` | — | `ip, ver, boot, upstream, dnslist[{ip,ms,cur}], pf, blocked, allowed, cached, domains, rssi, temp, cpu, heap, uptime, upat, pl, ph, pht, php, psv, dns, dnsf, dnsl, dnsTo, vcc, blocking, resumeIn, defcreds, bmode, v4only, kw, rb, ss, syslog, sysport, ssid, proxy, gafam[Google,Apple,Meta,Amazon,Microsoft,other], dnss[ad_set,total], geo[[cc,count]], geoMapped, clients[{ip,mac,name,blocked,allowed,ps,pac}], custom[], wild[], allow[], keyword[], url[], hosts[], ev[{seq,host,cip,mac,name,gaf}]` (+ diag `dq,bc,bch,bs,rc,lg,lw,ld`). `dns`=total ms, `dnsf`=upstream, `dnsl`=device, `cpu`=MHz, `vcc`=mV (ESP8266), `dnsTo`=DNS timeouts, `dnslist.ms`=-1 means probe failed, `cur` marks the active forwarder, `pf`=probe timeouts, `pl`=privacy level, `ph/pht`=headers now/max, `php/psv`=pages rewritten/all pages, `pac`=requests seen on the black-hole port, `boot`=boot counter, `upat`=seconds since the last successful blocklist upload (0 = not since boot), `ps`=client pause seconds left, `ssid`=connected network, `proxy`=PAC proxy, `gafam`=provider share of allowed lookups, `dnss`=forwarded answers with the DNSSEC `AD` bit, `geo`=estimated destination counts by country (RAM since reboot; `geoMapped` = total mapped). Totals survive reboots via `/stats.cfg`. |
+| GET | `/stats.json` | — | `ip, ver, boot, upstream, dnslist[{ip,ms,cur}], pf, blocked, allowed, cached, domains, rssi, temp, cpu, heap, uptime, upat, pl, ph, pht, php, psv, dns, dnsf, dnsl, dnsTo, vcc, blocking, resumeIn, defcreds, bmode, bttl, v4only, kw, rb, ss, ssid, proxy, gafam[Google,Apple,Meta,Amazon,Microsoft,other], dnss[ad_set,total], geo[[cc,count]], geoMapped, clients[{ip,mac,name,blocked,allowed,ps,pac}], custom[], wild[], allow[], keyword[], url[], hosts[], evSeq` (+ diag `dq,bc,bch,bs,rc,lg,lw,ld`). `dns`=total ms, `dnsf`=upstream, `dnsl`=device, `cpu`=MHz, `vcc`=mV (ESP8266), `dnsTo`=DNS timeouts, `dnslist.ms`=-1 means probe failed, `cur` marks the active forwarder, `pf`=probe timeouts, `pl`=privacy level, `ph/pht`=headers now/max, `php/psv`=pages rewritten/all pages, `pac`=requests seen on the black-hole port, `boot`=boot counter, `upat`=seconds since the last successful blocklist upload (0 = not since boot), `ps`=client pause seconds left, `ssid`=connected network, `proxy`=PAC proxy, `gafam`=provider share of allowed lookups, `dnss`=forwarded answers with the DNSSEC `AD` bit, `geo`=estimated destination counts by country (RAM since reboot; `geoMapped` = total mapped). Totals survive reboots via `/stats.cfg`. |
 | GET | `/setdns` | `d=ip[,ip…]` | Upstream candidates (1–4 IPv4, comma/space/newline separated); saves `/dns.cfg` and re-probes now |
 | GET | `/events` | `since=seq` | Recent-blocked ring `{last, ev:[{seq,host}]}` (Basic auth) |
 | GET | `/allow` | `d=domain`, `s=seconds` (optional) | Allowlist the domain (overrides blocklist). With `s` it is a **temporary** allow (RAM, capped at 24 h). CSRF only, **no** Basic (used by block page) |
-| GET | `/setblock` | `m=ip\|zero\|nxdomain`, `v4=0\|1`, `kw=0\|1`, `rb=0\|1`, `ss=0\|1`, `pl=0..3` | Block reply / IPv4-only / keyword / rebind guard / SafeSearch / privacy header level |
+| GET | `/setblock` | `m=ip\|zero\|nxdomain`, `ttl=0..86400`, `v4=0\|1`, `kw=0\|1`, `rb=0\|1`, `ss=0\|1`, `pl=0..3` | Block reply / blocked-answer cache TTL / IPv4-only / keyword / rebind guard / SafeSearch / privacy header level |
 | GET | `/setname` | `ip=`, `n=name` | Set a client's friendly name (empty name removes it); persisted in `/names.cfg` |
 | GET | `/pauseclient` | `ip=`, `s=seconds` | Pause blocking for one client (`s=0` resumes) |
 | GET | `/resetstats` | — | Zero blocked/allowed/cached, per-client counts, GAFM/DNSSEC/header counters, the geo map and the recent-blocked list |
@@ -157,7 +171,6 @@ Mutating endpoints require **Basic auth** (`WEB_USER:WEB_PASS`) + header
 | GET | `/__dnscheck` | — | Resolver-usage probe; **no auth**. The dashboard fetches `http://<random>.dnscheck/__dnscheck`, which resolves only if the client's DNS goes through this device |
 | GET | `/scan` | — | Blocking Wi-Fi scan → JSON `[{s,r,e}]` (single request, no polling) |
 | GET | `/setwifi` | `ssid=`, `pass=` | Try the new network for ~15s, persist only on success, else keep the current one |
-| GET | `/setsyslog` | `h=host`, `p=port` | Remote syslog (empty host = off) |
 | GET | `/sethost` | `n=name`, `ip=` | Add/replace a local DNS record |
 | GET | `/delhost` | `n=name` | Remove a local DNS record |
 | GET | `/addblock` | `d=domain` | Add a `block` rule (or a `wildcard` rule if `d` contains `*`) |
